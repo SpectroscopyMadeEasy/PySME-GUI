@@ -26,7 +26,6 @@ var Base64 = require('base64-arraybuffer');
 
 // This section is from the template: https://startbootstrap.com/themes/sb-admin-2/
 // Toggle the side navigation
-$(".sidebar").addClass("sidebar-dark");
 $("#sidebarToggle, #sidebarToggleTop").on('click', function (e: any) {
     $("body").toggleClass("sidebar-toggled");
     $(".sidebar").toggleClass("toggled");
