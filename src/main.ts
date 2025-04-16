@@ -1,11 +1,17 @@
 import { app, BrowserWindow } from "electron";
 import * as path from "path";
+require('@electron/remote/main').initialize()
 
 if (require('electron-squirrel-startup')) app.quit();
 
+// const log = require('electron-log');
+// log.transports.file.level = 'debug';
+// console.log = log.log;
+
 let mainWindow: Electron.BrowserWindow;
 
-app.allowRendererProcessReuse = true
+// 由于 Electron 10+ 版本中移除了 allowRendererProcessReuse 属性，此处注释掉相关代码
+// app.allowRendererProcessReuse = true
 
 function createWindow() {
   // Create the browser window.
@@ -17,18 +23,22 @@ function createWindow() {
     show: false,
     webPreferences: {
       nodeIntegration: true,
-      enableRemoteModule : true,
+      // 由于 Electron 10+ 版本中移除了 enableRemoteModule 选项，此处应该删除该配置项
       contextIsolation : false,
       preload: path.join(__dirname, "preload.js"),
     },
   });
+  require('@electron/remote/main').enable(mainWindow.webContents)
 
   // and load the index.html of the app.
   mainWindow.loadFile(path.join(__dirname, "../index.html"));
 
   // Open the DevTools.
   // mainWindow.webContents.openDevTools();
-  mainWindow.maximize()
+  // mainWindow.maximize()
+  mainWindow.on("ready-to-show", () => {
+    mainWindow.webContents.openDevTools();
+  });
   mainWindow.show()
 
   // Emitted when the window is closed.

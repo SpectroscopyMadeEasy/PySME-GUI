@@ -65,6 +65,14 @@ function save_table_extension(header: any, data: any) {
     return { "header": header, "data": data["data"] }
 }
 
+function process_segmented_data(data: any, offsets: number[]) {
+    let segments = [];
+    for (let i = 0; i < offsets.length - 1; i++) {
+        segments.push(data.slice(offsets[i], offsets[i + 1]));
+    }
+    return segments;
+}
+
 async function load_file(filename: string) {
     console.log("Loading file")
     var tmpout = tmp.fileSync({ postfix: ".json" });
@@ -79,7 +87,17 @@ async function load_file(filename: string) {
     for (const key in obj) {
         if (obj.hasOwnProperty(key)) {
             if (key == "header") continue;
+            console.log(key)
             const element = obj[key];
+            // 特殊处理 wave 数据
+            if (key === "wave" || !element.header) {
+                result[key] = element;
+                const segmentedKeys = ['wave', 'spec', 'synth', 'mask', 'telluric'];
+                if (segmentedKeys.includes(key) && element.data && element.offsets) {
+                    result[key] = process_segmented_data(element.data, element.offsets);
+                }
+                continue;
+            }
             const ext_module = element["header"]["__module__"];
             const ext_class = element["header"]["__class__"];
             let ext: any = {};
@@ -97,7 +115,7 @@ async function load_file(filename: string) {
         }
     }
     console.log(result)
-
+    cast_load_event(result, "spectrum")
     return result as SmeFile
 }
 

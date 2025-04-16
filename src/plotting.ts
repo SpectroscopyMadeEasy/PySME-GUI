@@ -1,4 +1,4 @@
-import { Main } from "electron";
+import { app } from "electron";
 
 // Define the colors and linestyles to use in the plot
 var fmt = {

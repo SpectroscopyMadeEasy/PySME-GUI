@@ -9,7 +9,8 @@ require('datatables.net-responsive-bs4')();
 require("popper.js")
 require("bootstrap");
 
-const { dialog } = require('electron').remote
+// 使用 electron 的 ipcRenderer 来获取 dialog
+const { dialog } = require('@electron/remote')
 var tmp = require('tmp');
 const chokidar = require('chokidar');
 const { Table } = require("apache-arrow");
@@ -25,6 +26,7 @@ var Base64 = require('base64-arraybuffer');
 
 // This section is from the template: https://startbootstrap.com/themes/sb-admin-2/
 // Toggle the side navigation
+$(".sidebar").addClass("sidebar-dark");
 $("#sidebarToggle, #sidebarToggleTop").on('click', function (e: any) {
     $("body").toggleClass("sidebar-toggled");
     $(".sidebar").toggleClass("toggled");
@@ -242,7 +244,9 @@ function cast_load_event(sme: SmeFile, ...updated: string[]) {
 }
 
 var ButtonLoad = document.getElementById("btn-load")
+console.log("Load button found:", ButtonLoad !== null)
 ButtonLoad.addEventListener('click', async (event) => {
+    console.log("Button clicked") // 添加这行
     var out = await dialog.showOpenDialog({ properties: ["openFile"] })
     if (!out.canceled) {
         var fname = out.filePaths[0];
