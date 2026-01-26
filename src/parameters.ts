@@ -2,6 +2,9 @@
 var FieldTeff = document.getElementById("par-teff") as HTMLInputElement
 var FieldLogg = document.getElementById("par-logg") as HTMLInputElement
 var FieldMonh = document.getElementById("par-monh") as HTMLInputElement
+var FieldWStart = document.getElementById("par-wstart") as HTMLInputElement
+var FieldWEnd = document.getElementById("par-wend") as HTMLInputElement
+var FieldWStep = document.getElementById("par-wstep") as HTMLInputElement
 var FieldVmic = document.getElementById("par-vmic") as HTMLInputElement
 var FieldVmac = document.getElementById("par-vmac") as HTMLInputElement
 var FieldVsini = document.getElementById("par-vsini") as HTMLInputElement
@@ -42,6 +45,13 @@ async function load_parameter_values(sme: SmeFile) {
     FieldTeff.value = String(sme.header.teff)
     FieldLogg.value = String(sme.header.logg)
     FieldMonh.value = String(sme.abund.header.monh)
+    if (sme.header.wran && sme.header.wran.length > 0) {
+        FieldWStart.value = String(sme.header.wran[0][0])
+        FieldWEnd.value = String(sme.header.wran[0][1])
+    }
+    if (sme.system_info && sme.system_info.header && sme.system_info.header["wave_step"] !== undefined) {
+        FieldWStep.value = String(sme.system_info.header["wave_step"])
+    }
     FieldVmic.value = String(sme.header.vmic)
     FieldVmac.value = String(sme.header.vmac)
     FieldVsini.value = String(sme.header.vsini)
@@ -94,6 +104,34 @@ FieldLogg.addEventListener("change", (event: any) => {
 })
 FieldMonh.addEventListener("change", (event: any) => {
     sme.abund.header.monh = Number(event.target.value)
+})
+function update_wran_from_fields() {
+    let wstart = Number(FieldWStart.value)
+    let wend = Number(FieldWEnd.value)
+    if (!Number.isFinite(wstart) || !Number.isFinite(wend)) {
+        return
+    }
+    sme.header.wran = [[wstart, wend]]
+}
+FieldWStart.addEventListener("change", () => {
+    update_wran_from_fields()
+})
+FieldWEnd.addEventListener("change", () => {
+    update_wran_from_fields()
+})
+FieldWStep.addEventListener("change", (event: any) => {
+    if (!sme.system_info) {
+        sme.system_info = { header: {} }
+    }
+    if (!sme.system_info.header) {
+        sme.system_info.header = {}
+    }
+    let step = Number(event.target.value)
+    if (Number.isFinite(step)) {
+        sme.system_info.header["wave_step"] = step
+    } else {
+        delete sme.system_info.header["wave_step"]
+    }
 })
 FieldVmic.addEventListener("change", (event: any) => {
     sme.header.vmic = Number(event.target.value)

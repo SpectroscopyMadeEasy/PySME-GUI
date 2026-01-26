@@ -176,6 +176,7 @@ function create_empty_sme_structure() {
 }
 
 var sme = create_empty_sme_structure();
+var sme_loaded_from_file = false;
 
 
 
@@ -206,6 +207,62 @@ async function synthesize_spectrum(sme: SmeFile) {
     })
 
     return promise
+}
+
+async function synthesize_from_params() {
+    let tmpin = tmp.fileSync({ postfix: ".json" });
+    let tmpout = tmp.fileSync({ postfix: ".sme" });
+    let tmplog = tmp.fileSync({ postfix: ".log", keep: true });
+
+    console.log("Watching file: " + tmplog.name)
+    const watcher = chokidar.watch(tmplog.name, { usePolling: true })
+    watcher.on('change', update_log)
+
+    let wstart_field = document.getElementById("par-wstart") as HTMLInputElement
+    let wend_field = document.getElementById("par-wend") as HTMLInputElement
+    let wstep_field = document.getElementById("par-wstep") as HTMLInputElement
+
+    let wstart = Number(wstart_field.value)
+    let wend = Number(wend_field.value)
+    let wstep = wstep_field.value
+
+    if (!Number.isFinite(wstart) || !Number.isFinite(wend)) {
+        show_error("Please set wavelength start and end before synthesizing.")
+        throw new Error("Missing wavelength range")
+    }
+
+    let linelist_file = sme.system_info && sme.system_info.header ? sme.system_info.header["linelist_file"] : ""
+    if (!linelist_file) {
+        show_error("Please load a linelist file before synthesizing.")
+        throw new Error("Missing linelist file")
+    }
+
+    let atmo_source = sme.atmo && sme.atmo.header ? sme.atmo.header.source : ""
+    if (!atmo_source) {
+        show_error("Please select an atmosphere model before synthesizing.")
+        throw new Error("Missing atmosphere source")
+    }
+
+    let params = {
+        teff: sme.header.teff,
+        logg: sme.header.logg,
+        monh: sme.abund.header.monh,
+        wstart: wstart,
+        wend: wend,
+        wstep: wstep,
+        linelist_file: linelist_file,
+        atmo_source: atmo_source,
+        atmo_method: sme.atmo.header.method,
+        atmo_geom: sme.atmo.header.geom,
+        atmo_depth: sme.atmo.header.depth,
+        atmo_interp: sme.atmo.header.interp,
+    }
+
+    fs.writeFileSync(tmpin.name, JSON.stringify(params))
+    await call_python("synthesize_from_params.py", [tmpin.name, tmpout.name, "--log_file=" + tmplog.name])
+    let sme_out = await load_file(tmpout.name)
+    show_alert("Synthesis Completed", "info")
+    return sme_out
 }
 
 
@@ -248,6 +305,7 @@ ButtonLoad.addEventListener('click', async (event) => {
         var fname = out.filePaths[0];
         console.log("Opening new file: " + fname)
         sme = await load_file(fname)
+        sme_loaded_from_file = true
         cast_load_event(sme)
     } else {
         console.log("User did not select a file")
@@ -270,8 +328,14 @@ var ButtonSynthesize = document.getElementById("btn-synthesize")
 ButtonSynthesize.addEventListener('click', async (event) => {
     console.log("Start synthesizing")
     try {
-        sme = await synthesize_spectrum(sme)
-        cast_load_event(sme, "spectrum", "citation")
+        if (sme_loaded_from_file) {
+            sme = await synthesize_spectrum(sme)
+            cast_load_event(sme, "spectrum", "citation")
+        } else {
+            sme = await synthesize_from_params()
+            sme_loaded_from_file = true
+            cast_load_event(sme, "spectrum", "citation", "parameters", "linelist", "atmosphere")
+        }
     } catch (err) {
         console.error(err)
     }

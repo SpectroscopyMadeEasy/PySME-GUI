@@ -137,6 +137,10 @@ function create_mask_points(x: FloatArray, y: FloatArray, mask: IntArray, value:
 }
 
 function plot_sme(sme: any) {
+    if (!sme || !sme.wave || sme.wave.length === 0) {
+        reset_plot()
+        return
+    }
     reset_plot()
     var nSegment = sme.wave.length
 

@@ -2,6 +2,7 @@ from pysme.util import start_logging
 from pysme.linelist.vald import ValdFile
 
 import json
+import math
 import argparse
 from os.path import dirname, join
 from electron import call
@@ -21,17 +22,28 @@ def main(fname_in, fname_out, linelist_format="VALD", log_file=None):
 
     data = linelist._lines.to_dict(orient="records")
 
+    def sanitize_json(obj):
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        if isinstance(obj, dict):
+            return {k: sanitize_json(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [sanitize_json(v) for v in obj]
+        return obj
+
     result = {
         "info": {
             "format": linelist.lineformat,
             "medium": linelist.medium,
             "citation_info": linelist.citation_info,
         },
-        "data": data,
+        "data": sanitize_json(data),
     }
 
     with open(fname_out, "w") as f:
-        json.dump(result, f)
+        json.dump(result, f, allow_nan=False)
 
     return result
 

@@ -7,17 +7,24 @@ addEventListener("pysme_load", (event: any) => {
 })
 
 async function collect_citations(sme: SmeFile) {
-    let data = await Cite.inputAsync(sme.header.citation_info, { forceType: "@bibtex/text" })
+    let header_citation = (sme && sme.header) ? sme.header.citation_info : ""
+    if (!header_citation) {
+        header_citation = ""
+    }
+    let data = await Cite.inputAsync(header_citation, { forceType: "@bibtex/text" })
 
     for (const key in sme) {
         if (sme.hasOwnProperty(key)) {
             const element = (sme as { [id: string]: any })[key];
             if (typeof element == "object") {
-                if (element.hasOwnProperty("citation_info")) {
-                    let temp = await Cite.inputAsync(element["citation_info"], { forceType: "@bibtex/text" })
-                    for (let i = 0; i < temp.length; i++) {
-                        const element = temp[i];
-                        data.push(element)
+                if (element && element.hasOwnProperty("citation_info")) {
+                    let citation = element["citation_info"]
+                    if (citation) {
+                        let temp = await Cite.inputAsync(citation, { forceType: "@bibtex/text" })
+                        for (let i = 0; i < temp.length; i++) {
+                            const element = temp[i];
+                            data.push(element)
+                        }
                     }
                 }
             }
@@ -119,6 +126,10 @@ fs.readFile(join(__dirname, "data/citation-journal-replacements.json"), "utf-8",
 
 var DivCitation = document.getElementById("div-citation") as HTMLDivElement
 async function show_citation(sme: SmeFile) {
+    if (!sme || !sme.header) {
+        DivCitation.innerHTML = ""
+        return
+    }
     let bib = await collect_citations(sme)
     let content = generate_citations_html(bib)
     DivCitation.innerHTML = content

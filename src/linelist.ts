@@ -17,6 +17,13 @@ ButtonLinelistLoad.addEventListener("click", async (event) => {
         var fname = out.filePaths[0];
         try {
             sme = await load_new_linelist(sme, fname)
+            if (!sme.system_info) {
+                sme.system_info = { header: {} }
+            }
+            if (!sme.system_info.header) {
+                sme.system_info.header = {}
+            }
+            sme.system_info.header["linelist_file"] = fname
             cast_load_event(sme, "linelist")
         } catch (err) {
             console.error(err)
@@ -31,26 +38,50 @@ ButtonLinelistRequestVald.addEventListener("click", (event) => {
 
 function show_linelist(sme: SmeFile) {
     $(document).ready(function () {
+        let rows: any[] = sme.linelist.data || []
+        let columns: any[] = []
+        let referenceIndex = -1
+        if (rows.length > 0) {
+            columns = Object.keys(rows[0]).map((key) => {
+                let column: any = { title: key, data: key }
+                if (key === "reference") {
+                    referenceIndex = columns.length
+                    column.className = "linelist-reference"
+                    column.render = function (data: any, type: string) {
+                        if (data === null || data === undefined) return ""
+                        let text = String(data).replace(/\s+/g, " ").trim()
+                        if (type === "display") {
+                            return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
+                        }
+                        return text
+                    }
+                }
+                if (key === "term_lower" || key === "term_upper" || key === "term_higher") {
+                    column.render = function (data: any, type: string) {
+                        if (data === null || data === undefined) return ""
+                        let text = String(data).replace(/\s+/g, " ").trim()
+                        if (type === "display") {
+                            return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
+                        }
+                        return text
+                    }
+                }
+                return column
+            })
+        }
         $('#table-linelist').DataTable({
             destroy: true,
-            responsive: {
-                details: {
-                    type: 'column',
-                    target: 'tr'
-                }
-            },
-            data: sme.linelist.data,
-            columns: [
-                { title: 'species', data: 'species' },
-                { title: 'wlcent', data: 'wlcent' },
-                { title: 'excit', data: 'excit' },
-                { title: 'gflog', data: 'gflog' },
-                { title: 'gamrad', data: 'gamrad' },
-                { title: 'gamqst', data: 'gamqst' },
-                { title: 'gamvw', data: 'gamvw' },
-                { title: 'lande', data: 'lande' },
-                { title: 'depth', data: 'depth' }
-            ]
+            responsive: false,
+            scrollX: true,
+            scrollCollapse: true,
+            autoWidth: false,
+            data: rows,
+            columns: columns,
+            columnDefs: referenceIndex >= 0 ? [{
+                targets: referenceIndex,
+                width: "260px",
+                className: "linelist-reference"
+            }] : []
         });
     });
 }

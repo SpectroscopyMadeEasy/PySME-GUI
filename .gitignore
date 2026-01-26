@@ -10,3 +10,5 @@ scripts/__pycache__/
 
 # CSS are created from SCSS
 css/
+
+syntherr.log

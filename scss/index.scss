@@ -66,3 +66,26 @@ $theme-colors: (
         color: $gray-800;
     }
 }
+
+#div-linelist {
+    overflow-x: auto;
+}
+
+.linelist-reference {
+    width: 260px;
+    max-width: 260px;
+    white-space: nowrap;
+}
+
+#table-linelist thead th {
+    text-align: center;
+}
+
+.linelist-truncate {
+    display: inline-block;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+}
