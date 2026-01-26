@@ -311,8 +311,8 @@ function plot_sme(sme: any) {
                 }
             }
 
-            console.log(labels)
-            console.log(wlcent)
+            // console.log(labels)
+            // console.log(wlcent)
 
             for (let key = 0; key < wlcent.length; key++) {
                 var x_loc = wlcent[key] * (1 + vrad / 3e5)

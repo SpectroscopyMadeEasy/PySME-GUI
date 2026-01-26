@@ -59,3 +59,7 @@ function show_alert_sync(message: string, level: LogLevel = "error") {
     `
     DivAlert.appendChild(alert)
 }
+
+function clear_alerts() {
+    DivAlert.textContent = ""
+}

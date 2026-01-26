@@ -65,6 +65,32 @@ function save_table_extension(header: any, data: any) {
     return { "header": header, "data": data["data"] }
 }
 
+function load_iliffe_vector(data: any, key: string) {
+    let values: number[] = data["data"] || []
+    let offsets: number[] = data["offsets"] || []
+    let result: any[] = []
+    for (let i = 0; i < offsets.length - 1; i++) {
+        let start = offsets[i]
+        let end = offsets[i + 1]
+        let slice = values.slice(start, end)
+        if (key === "mask") {
+            result.push(new Int8Array(slice))
+        } else {
+            result.push(new Float64Array(slice))
+        }
+    }
+    return result
+}
+
+function save_iliffe_vector(vec: any[]) {
+    let header = { "__module__": "flex.extensions.bindata", "__class__": "MultipleDataExtension", "__header__": true }
+    let data: any = {}
+    for (let i = 0; i < vec.length; i++) {
+        data[String(i)] = vec[i]
+    }
+    return save_multiple_data_extension(header, data)
+}
+
 async function load_file(filename: string) {
     console.log("Loading file")
     var tmpout = tmp.fileSync({ postfix: ".json" });
@@ -80,6 +106,12 @@ async function load_file(filename: string) {
         if (obj.hasOwnProperty(key)) {
             if (key == "header") continue;
             const element = obj[key];
+            if (!element || !element["header"]) {
+                if (element && element["data"] && element["offsets"]) {
+                    result[key] = load_iliffe_vector(element, key)
+                }
+                continue;
+            }
             const ext_module = element["header"]["__module__"];
             const ext_class = element["header"]["__class__"];
             let ext: any = {};
@@ -107,6 +139,12 @@ async function save_file(filename: string, sme: any) {
         if (sme.hasOwnProperty(key)) {
             if (key == "header") continue;
             const element = sme[key];
+            if (!element || !element["header"]) {
+                if (Array.isArray(element)) {
+                    result[key] = save_iliffe_vector(element)
+                }
+                continue;
+            }
             const ext_module = element["header"]["__module__"];
             const ext_class = element["header"]["__class__"];
             let ext: any = {};

@@ -138,7 +138,7 @@ function create_empty_sme_structure() {
                 logg: 4,
                 vturb: 0,
                 lonh: 0,
-                source: "",
+                source: "marcs2012.sav",
                 method: "grid",
                 geom: "PP",
                 radius: new Float64Array(),
@@ -327,6 +327,7 @@ ButtonSave.addEventListener('click', async (event) => {
 var ButtonSynthesize = document.getElementById("btn-synthesize")
 ButtonSynthesize.addEventListener('click', async (event) => {
     console.log("Start synthesizing")
+    clear_alerts()
     try {
         if (sme_loaded_from_file) {
             sme = await synthesize_spectrum(sme)
@@ -344,6 +345,7 @@ ButtonSynthesize.addEventListener('click', async (event) => {
 var ButtonFit = document.getElementById("btn-fit")
 ButtonFit.addEventListener('click', async (event) => {
     console.log("Start fitting")
+    clear_alerts()
     try {
         sme = await fit_spectrum(sme)
         cast_load_event(sme)
