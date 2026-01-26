@@ -148,6 +148,14 @@
 
             </div>
           </div>
+          <!-- Synthesis Status (Top Right) -->
+          <div id="div-synthesis-status" class="synthesis-status" style="display:none;">
+            <div class="synthesis-status-title">Synthesis</div>
+            <div class="synthesis-status-message" id="synthesis-status-message">Synthesizing...</div>
+            <button type="button" class="close" id="btn-synthesis-status-close" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
 
           <!-- Content Row Spectrum -->
 
@@ -1247,10 +1255,10 @@
                   <table id="table-log" class="table table-bordered table-hover table-sm w-100">
                     <thead>
                       <tr>
-                        <th>Timestamp</th>
-                        <th>Log Level</th>
-                        <th>Module</th>
-                        <th>Message</th>
+                        <th class="log-timestamp">Timestamp</th>
+                        <th class="log-level">Log Level</th>
+                        <th class="log-module">Module</th>
+                        <th class="log-message">Message</th>
                       </tr>
                     </thead>
                     <tbody id="table-log-body">

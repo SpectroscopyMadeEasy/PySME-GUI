@@ -45,6 +45,53 @@ $theme-colors: (
     }
   }
 
+// Softer log row colors + hover highlight (override table-hover)
+@each $color, $value in $theme-colors {
+    #table-log tbody tr.log-#{$color} > td {
+        background-color: lighten($value, 38%);
+        color: $black;
+        transition: background-color 120ms ease-in-out;
+    }
+    #table-log.table-hover tbody tr.log-#{$color}:hover > td {
+        background-color: lighten($value, 20%) !important;
+    }
+}
+
+.log-message {
+    max-width: 0;
+}
+
+.log-timestamp {
+    width: 180px;
+    white-space: nowrap;
+}
+
+.log-level {
+    width: 90px;
+    white-space: nowrap;
+}
+
+.log-module {
+    width: 160px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#table-log {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.log-message-text {
+    display: inline-block;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+}
+
 .hover-color{
     cursor: pointer;
     &:hover{
@@ -67,8 +114,61 @@ $theme-colors: (
     }
 }
 
+// Keep the topbar visible while scrolling
+#content .topbar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: $sidebar-base-width;
+    z-index: 1030;
+}
+@media (max-width: 768px) {
+    #content .topbar {
+        left: 0;
+    }
+}
+#content {
+    padding-top: $topbar-base-height;
+}
+
+.synthesis-status {
+    position: fixed;
+    top: 0.75rem;
+    right: 1rem;
+    z-index: 1040;
+    background: $white;
+    border: 1px solid $gray-300;
+    border-left: 4px solid $blue;
+    border-radius: 0.35rem;
+    padding: 0.5rem 0.75rem 0.5rem 0.75rem;
+    min-width: 220px;
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.08);
+}
+.synthesis-status.synthesis-status-success {
+    background: lighten($green, 45%);
+    border-left-color: $green;
+}
+.synthesis-status-title {
+    font-weight: 600;
+    margin-right: 1.5rem;
+}
+.synthesis-status-message {
+    font-size: 0.9rem;
+    color: $gray-700;
+}
+.synthesis-status .close {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+}
+
 #div-linelist {
     overflow-x: auto;
+}
+
+#table-linelist {
+    width: max-content;
+    min-width: 100%;
 }
 
 .linelist-reference {

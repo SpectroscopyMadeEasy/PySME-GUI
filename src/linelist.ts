@@ -1,10 +1,17 @@
 
 
+var LinelistTable: any = null
+
 addEventListener("pysme_load", (event: any) => {
     let sme: SmeFile = event.detail.structure
     let updated: string[] = event.detail.updated
     if (!updated.length || updated.includes("linelist")) {
         show_linelist(sme)
+        return
+    }
+    // After synthesize, header/body can misalign; re-adjust if table exists
+    if (updated.includes("spectrum") && LinelistTable) {
+        adjust_linelist_table(LinelistTable)
     }
 })
 
@@ -42,7 +49,13 @@ function show_linelist(sme: SmeFile) {
         let columns: any[] = []
         let referenceIndex = -1
         if (rows.length > 0) {
-            columns = Object.keys(rows[0]).map((key) => {
+            let keySet = new Set<string>()
+            rows.forEach((row) => {
+                if (!row) return
+                Object.keys(row).forEach((k) => keySet.add(k))
+            })
+            let keys = Array.from(keySet)
+            columns = keys.map((key) => {
                 let column: any = { title: key, data: key }
                 if (key === "reference") {
                     referenceIndex = columns.length
@@ -69,12 +82,12 @@ function show_linelist(sme: SmeFile) {
                 return column
             })
         }
-        $('#table-linelist').DataTable({
+        let table = $('#table-linelist').DataTable({
             destroy: true,
             responsive: false,
-            scrollX: true,
-            scrollCollapse: true,
-            autoWidth: false,
+            scrollX: false,
+            scrollCollapse: false,
+            autoWidth: true,
             data: rows,
             columns: columns,
             columnDefs: referenceIndex >= 0 ? [{
@@ -83,7 +96,22 @@ function show_linelist(sme: SmeFile) {
                 className: "linelist-reference"
             }] : []
         });
+        LinelistTable = table
+        // Ensure header/body alignment after render and on layout changes
+        setTimeout(() => { adjust_linelist_table(table); }, 0);
+        setTimeout(() => { adjust_linelist_table(table); }, 200);
+        setTimeout(() => { adjust_linelist_table(table); }, 500);
+        $(window).off("resize.linelist").on("resize.linelist", () => {
+            if (LinelistTable) adjust_linelist_table(LinelistTable);
+        });
     });
+}
+
+function adjust_linelist_table(table: any) {
+    let container = $(table.table().container());
+    container.find("div.dataTables_scrollHeadInner, div.dataTables_scrollHeadInner > table").css("width", "");
+    container.find("div.dataTables_scrollBody > table").css("width", "");
+    table.columns.adjust().draw(false);
 }
 
 async function load_new_linelist(sme: SmeFile, linelist_file: string) {

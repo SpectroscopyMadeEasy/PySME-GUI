@@ -51,8 +51,11 @@ function update_abundance(sme: SmeFile) {
         const element = elements[i];
         let field = document.getElementById(`par-abund-input-${element}`) as HTMLInputElement
         let value = sme.abund.data[i]
-        if (isNaN(value)) value = -99
-        field.value = String(value)
+        if (value === undefined || value === null || isNaN(value)) {
+            field.value = ""
+        } else {
+            field.value = String(value)
+        }
     }
 }
 
@@ -73,6 +76,16 @@ var elements = [
     "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf",
     "Es",]
 
+function clear_abundance_inputs_if_nan() {
+    for (let i = 0; i < elements.length; i++) {
+        const element = elements[i]
+        let field = document.getElementById(`par-abund-input-${element}`) as HTMLInputElement
+        if (field && field.value.trim().toLowerCase() === "nan") {
+            field.value = ""
+        }
+    }
+}
+
 // index of each element in the pattern data array
 var elements_dict: { [id: string]: number } = {}
 for (let i = 0; i < elements.length; i++) {
@@ -80,12 +93,19 @@ for (let i = 0; i < elements.length; i++) {
     elements_dict[element] = i
 }
 
+clear_abundance_inputs_if_nan()
+
 for (let i = 0; i < elements.length; i++) {
     const element = elements[i];
     let field = document.getElementById(`par-abund-input-${element}`)
     field.addEventListener("change", (event: any) => {
         let i = elements_dict[element]
-        let value = Number(event.target.value)
-        sme.abund.data[i] = value
+        let raw = String(event.target.value).trim()
+        if (raw === "") {
+            sme.abund.data[i] = NaN
+        } else {
+            let value = Number(raw)
+            sme.abund.data[i] = value
+        }
     })
 }

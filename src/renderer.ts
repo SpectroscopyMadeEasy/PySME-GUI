@@ -201,12 +201,62 @@ async function synthesize_spectrum(sme: SmeFile) {
     var promise = new Promise<SmeFile>((resolve, reject) => {
         save_file(tmpin.name, sme).then(() => {
             call_python("synthesize_spectrum.py", [tmpin.name, tmpout.name, "--log_file=" + tmplog.name]).then(() => {
-                load_file(tmpout.name).then((sme) => { show_alert("Synthesis Completed", "info"); resolve(sme) })
+                load_file(tmpout.name).then((sme) => { resolve(sme) })
             })
         });
     })
 
     return promise
+}
+
+function apply_wavelength_step_from_ui(sme: SmeFile) {
+    let wstart_field = document.getElementById("par-wstart") as HTMLInputElement
+    let wend_field = document.getElementById("par-wend") as HTMLInputElement
+    let wstep_field = document.getElementById("par-wstep") as HTMLInputElement
+
+    let wstart = Number(wstart_field.value)
+    let wend = Number(wend_field.value)
+    let wstep_raw = wstep_field.value
+    let wstep = Number(wstep_raw)
+
+    if (!Number.isFinite(wstart) || !Number.isFinite(wend) || wstart >= wend) {
+        return
+    }
+
+    sme.header.wran = [[wstart, wend]]
+
+    if (wstep_raw.trim() === "" || !Number.isFinite(wstep) || wstep <= 0) {
+        sme.wave = null
+        return
+    }
+
+    let count = Math.floor((wend - wstart) / wstep) + 1
+    let wave = new Float64Array(count)
+    for (let i = 0; i < count; i++) {
+        wave[i] = wstart + i * wstep
+    }
+    sme.wave = [wave]
+}
+
+function validate_required_params_for_synthesize(): boolean {
+    let missing: string[] = []
+    let teff = (document.getElementById("par-teff") as HTMLInputElement).value
+    let logg = (document.getElementById("par-logg") as HTMLInputElement).value
+    let monh = (document.getElementById("par-monh") as HTMLInputElement).value
+    let wstart = (document.getElementById("par-wstart") as HTMLInputElement).value
+    let wend = (document.getElementById("par-wend") as HTMLInputElement).value
+
+    if (!teff.trim()) missing.push("Teff")
+    if (!logg.trim()) missing.push("log(g)")
+    if (!monh.trim()) missing.push("[M/H]")
+    if (!wstart.trim()) missing.push("Wavelength start")
+    if (!wend.trim()) missing.push("Wavelength end")
+
+    if (missing.length > 0) {
+        show_error("Missing required parameters: " + missing.join(", "))
+        return false
+    }
+    return true
 }
 
 async function synthesize_from_params() {
@@ -261,7 +311,6 @@ async function synthesize_from_params() {
     fs.writeFileSync(tmpin.name, JSON.stringify(params))
     await call_python("synthesize_from_params.py", [tmpin.name, tmpout.name, "--log_file=" + tmplog.name])
     let sme_out = await load_file(tmpout.name)
-    show_alert("Synthesis Completed", "info")
     return sme_out
 }
 
@@ -328,17 +377,27 @@ var ButtonSynthesize = document.getElementById("btn-synthesize")
 ButtonSynthesize.addEventListener('click', async (event) => {
     console.log("Start synthesizing")
     clear_alerts()
+    show_synthesis_status("Synthesizing...", true)
     try {
+        if (!validate_required_params_for_synthesize()) {
+            hide_synthesis_status()
+            return
+        }
         if (sme_loaded_from_file) {
+            apply_wavelength_step_from_ui(sme)
             sme = await synthesize_spectrum(sme)
-            cast_load_event(sme, "spectrum", "citation")
+            cast_load_event(sme, "spectrum", "citation", "abundance")
         } else {
             sme = await synthesize_from_params()
             sme_loaded_from_file = true
-            cast_load_event(sme, "spectrum", "citation", "parameters", "linelist", "atmosphere")
+            cast_load_event(sme, "spectrum", "citation", "parameters", "linelist", "atmosphere", "abundance")
         }
+        show_synthesis_status("Synthesis Completed", true)
+        setTimeout(() => { hide_synthesis_status() }, 2000)
     } catch (err) {
         console.error(err)
+        show_synthesis_status("Synthesis Failed", true)
+        setTimeout(() => { hide_synthesis_status() }, 2000)
     }
 })
 
@@ -352,5 +411,29 @@ ButtonFit.addEventListener('click', async (event) => {
     } catch (err) {
         console.error(err)
     }
+})
+
+function show_synthesis_status(message: string, allow_close: boolean) {
+    let box = document.getElementById("div-synthesis-status") as HTMLDivElement
+    let msg = document.getElementById("synthesis-status-message") as HTMLDivElement
+    let btn = document.getElementById("btn-synthesis-status-close") as HTMLButtonElement
+    msg.textContent = message
+    box.style.display = "block"
+    btn.style.display = allow_close ? "block" : "none"
+    if (message === "Synthesis Completed") {
+        box.classList.add("synthesis-status-success")
+    } else {
+        box.classList.remove("synthesis-status-success")
+    }
+}
+
+function hide_synthesis_status() {
+    let box = document.getElementById("div-synthesis-status") as HTMLDivElement
+    box.style.display = "none"
+}
+
+var BtnSynthesisStatusClose = document.getElementById("btn-synthesis-status-close") as HTMLButtonElement
+BtnSynthesisStatusClose.addEventListener("click", () => {
+    hide_synthesis_status()
 })
 

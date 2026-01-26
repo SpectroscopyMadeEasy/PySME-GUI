@@ -216,6 +216,8 @@ function plot_sme(sme: any) {
                 x: sme.wave[seg],
                 y: sme.spec[seg],
                 line: { "color": fmt["Obs"]["color"] },
+                mode: "lines+markers",
+                marker: { size: 3 },
                 name: "Observation",
                 legendgroup: 0,
                 visible: 0 == seg,
@@ -243,6 +245,8 @@ function plot_sme(sme: any) {
                 y: data_synth,
                 name: "Synthethic",
                 line: { "color": fmt["Syn"]["color"] },
+                mode: "lines+markers",
+                marker: { size: 3 },
                 legendgroup: 1,
                 visible: 0 == seg,
             })

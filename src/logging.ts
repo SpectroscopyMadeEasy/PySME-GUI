@@ -31,10 +31,12 @@ function create_node(row: LogEntry) {
     let background = `log-${row.level}`
 
     let html = `
-        <td>${row.datetime}</td>
-        <td>${row.level.toUpperCase()}</td>
-        <td>${row.source}</td>
-        <td class="text-nowrap">${row.message}</td>
+        <td class="log-timestamp">${row.datetime}</td>
+        <td class="log-level">${row.level.toUpperCase()}</td>
+        <td class="log-module">${row.source}</td>
+        <td class="log-message">
+            <span class="log-message-text" title="${row.message.replace(/\"/g, '&quot;')}">${row.message}</span>
+        </td>
     `
 
     let child = document.createElement("tr")
@@ -50,7 +52,7 @@ function parse_log(log: string) {
     let match;
     while ((match = re.exec(log)) !== null) {
         let row: LogEntry = {
-            datetime: `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`,
+            datetime: `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6].split(',')[0]}`,
             level: match[7].toLowerCase() as LogLevel,
             source: match[8],
             message: match[9]
