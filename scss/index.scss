@@ -288,6 +288,18 @@ $theme-colors: (
     font-size: 0.87rem;
 }
 
+#div-nlte .input-group {
+    flex-wrap: nowrap;
+}
+#div-nlte .nlte-element-select {
+    flex: 0 0 4.5rem;
+    max-width: 4.5rem;
+}
+#div-nlte .nlte-file-select {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 #wrapper #content-wrapper {
     background-color: $white;
 }

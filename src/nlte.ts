@@ -118,7 +118,7 @@ function create_nlte_field(element?: string, datafile?: string) {
     child.classList.add("input-group", "input-group-sm", "mb-1")
 
     let select_element = document.createElement("select")
-    select_element.classList.add("custom-select", "input-group-width-small")
+    select_element.classList.add("custom-select", "nlte-element-select")
     child.appendChild(select_element)
 
     let available_elements = get_all_elements()
@@ -140,7 +140,7 @@ function create_nlte_field(element?: string, datafile?: string) {
     nlte_element_selectors.push(select_element)
 
     let select_file = document.createElement("select")
-    select_file.classList.add("custom-select")
+    select_file.classList.add("custom-select", "nlte-file-select")
     child.appendChild(select_file)
 
     for (const key in nlte_files) {
@@ -166,17 +166,17 @@ function create_nlte_field(element?: string, datafile?: string) {
     append.classList.add("input-group-append")
     child.appendChild(append)
 
+    let btn_custom = document.createElement("button")
+    btn_custom.classList.add("btn", "btn-outline-secondary")
+    btn_custom.type = "button"
+    btn_custom.innerText = "Add custom grid"
+    append.appendChild(btn_custom)
+
     let button = document.createElement("button")
     button.classList.add("btn", "btn-outline-secondary")
     button.type = "button"
     button.innerText = "-"
     append.appendChild(button)
-
-    let btn_custom = document.createElement("button")
-    btn_custom.classList.add("btn", "btn-outline-secondary")
-    btn_custom.type = "button"
-    btn_custom.innerText = "Add NLTE Grid"
-    append.appendChild(btn_custom)
 
     button.addEventListener("click", (event) => {
         // Remove the NLTE from the sme object
