@@ -277,9 +277,35 @@ $theme-colors: (
 .sidebar hr.sidebar-divider {
     margin-top: 0.33rem;
 }
+.sidebar hr.sidebar-divider:first-of-type {
+    display: none;
+}
+
+.sidebar .nav-item .nav-link i {
+    font-size: 1.33rem;
+}
+.sidebar .nav-item .nav-link span {
+    font-size: 0.87rem;
+}
 
 #wrapper #content-wrapper {
     background-color: $white;
+}
+#content-wrapper {
+    background-color: $white !important;
+}
+#page-top,
+body,
+#wrapper {
+    background-color: $white;
+}
+#content {
+    background-color: $white;
+}
+#content .topbar {
+    background-color: $white;
+    border-bottom: 0;
+    margin-bottom: 0;
 }
 #content .container-fluid {
     background-color: $gray-100;

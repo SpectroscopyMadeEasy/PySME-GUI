@@ -240,7 +240,7 @@ function create_nlte_field(element?: string, datafile?: string) {
 
 BtnNlteAdd.addEventListener("click", (event) => {
     let child = create_nlte_field()
-    DivNlte.insertBefore(child, BtnNlteAdd)
+    DivNlte.appendChild(child)
 })
 
 function load_nlte_values(sme: SmeFile) {
@@ -258,7 +258,7 @@ function load_nlte_values(sme: SmeFile) {
         const element = sme.nlte.header.elements[i];
         const datafile = sme.nlte.header.grids[element];
         let child = create_nlte_field(element, datafile)
-        DivNlte.insertBefore(child, BtnNlteAdd)
+        DivNlte.appendChild(child)
     }
     console.log("Finished loading NLTE values")
 }
