@@ -81,8 +81,8 @@ class SmeError {
 class EndianError extends SmeError { }
 class IdlError extends SmeError { }
 
-function default_mu_values() {
-    return new Float64Array([
+function default_mu_values(): number[] {
+    return [
         0.96362411,
         0.88640526,
         0.80178373,
@@ -90,7 +90,7 @@ function default_mu_values() {
         0.5976143,
         0.46291005,
         0.26726124,
-    ])
+    ]
 }
 
 function create_empty_sme_structure() {

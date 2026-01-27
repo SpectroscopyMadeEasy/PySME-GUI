@@ -75,9 +75,29 @@ function set_mask(sme: SmeFile, range: [number, number]) {
     var value = get_mask_value()
     var seg = get_segment()
 
+    if (!sme.wave || !sme.wave[seg]) {
+        return
+    }
+    if (!sme.mask || !Array.isArray(sme.mask)) {
+        sme.mask = []
+    }
+    if (!sme.mask[seg] || sme.mask[seg].length !== sme.wave[seg].length) {
+        sme.mask[seg] = new Int8Array(sme.wave[seg].length)
+    }
+
     var wave = sme.wave[seg]
     var wmin = range[0]
     var wmax = range[1]
+
+    let base_y = null
+    if (sme.spec && sme.spec[seg]) {
+        base_y = sme.spec[seg]
+    } else if (sme.synth && sme.synth[seg]) {
+        base_y = sme.synth[seg]
+    }
+    if (!base_y) {
+        return
+    }
 
     if (typeof (sme.mask[seg][0]) === "bigint") {
         let mask = sme.mask[seg] as BigInt64Array
@@ -100,20 +120,24 @@ function set_mask(sme: SmeFile, range: [number, number]) {
         })
     }
 
-    var idx = get_data_index(seg, "linemask")
+    var idx_line = get_data_index(seg, "linemask")
+    var idx_cont = get_data_index(seg, "contmask")
+    if (idx_line === undefined || idx_cont === undefined) {
+        plot_sme(sme)
+        return
+    }
     var [x, y] = create_mask_points(
-        sme.wave[seg], sme.spec[seg], sme.mask[seg], 1
+        sme.wave[seg], base_y, sme.mask[seg], 1
     )
-    data[idx].x = x
-    data[idx].y = y
+    data[idx_line].x = x
+    data[idx_line].y = y
 
-    var idx = get_data_index(seg, "contmask")
     var [x, y] = create_mask_points(
-        sme.wave[seg], sme.spec[seg], sme.mask[seg], 2
+        sme.wave[seg], base_y, sme.mask[seg], 2
     )
 
-    data[idx].x = x
-    data[idx].y = y
+    data[idx_cont].x = x
+    data[idx_cont].y = y
 
     layout.datarevision = layout.datarevision + 1
     Plotly.react(graphDiv, data, layout)
@@ -182,10 +206,17 @@ function plot_sme(sme: any) {
         // Annoying I know, but plotly doesn't seem to have good controls for the z order
         // Or Legend order for that matter
 
-        if (base_sme.mask) {
+        let base_y = null
+        if (base_sme.spec && base_sme.spec[seg]) {
+            base_y = base_sme.spec[seg]
+        } else if (base_sme.synth && base_sme.synth[seg]) {
+            base_y = base_sme.synth[seg]
+        }
+        let base_mask = base_sme.mask && base_sme.mask[seg] ? base_sme.mask[seg] : null
+        if (base_mask && base_y && base_mask.length === base_sme.wave[seg].length) {
             // Line mask
             var [x, y] = create_mask_points(
-                base_sme.wave[seg], base_sme.spec[seg], base_sme.mask[seg], 1
+                base_sme.wave[seg], base_y, base_mask, 1
             )
 
             data.push({
@@ -206,7 +237,7 @@ function plot_sme(sme: any) {
 
             // Cont mask
             var [x, y] = create_mask_points(
-                base_sme.wave[seg], base_sme.spec[seg], base_sme.mask[seg], 2
+                base_sme.wave[seg], base_y, base_mask, 2
             )
 
             data.push(
@@ -469,8 +500,16 @@ function plot_sme(sme: any) {
 
     if (initial_setup) {
         graphDiv.on('plotly_selected', (event: any) => {
-            if (event) {
+            if (event && event.range && event.range.x) {
                 var range: [number, number] = event.range.x
+                if (current_plot_sme) {
+                    set_mask(current_plot_sme, range)
+                }
+            }
+        })
+        graphDiv.on('plotly_relayout', (event: any) => {
+            if (event && typeof event["xaxis.range[0]"] !== "undefined" && typeof event["xaxis.range[1]"] !== "undefined") {
+                var range: [number, number] = [event["xaxis.range[0]"], event["xaxis.range[1]"]]
                 if (current_plot_sme) {
                     set_mask(current_plot_sme, range)
                 }
