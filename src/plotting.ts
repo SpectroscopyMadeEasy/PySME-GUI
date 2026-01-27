@@ -36,6 +36,44 @@ var data_index: { [id: string]: { [id: number]: number } } = {
 // Not showing annotations is a lot faster
 var show_annotations = true;
 
+function get_vector_segments(vec: any): FloatArray[] {
+    if (!vec) return []
+    if (ArrayBuffer.isView(vec)) return [vec as FloatArray]
+    if (Array.isArray(vec)) return vec
+    if (typeof vec.length === "number") {
+        let segments: FloatArray[] = []
+        for (let i = 0; i < vec.length; i++) {
+            if (vec[i]) segments.push(vec[i])
+        }
+        return segments
+    }
+    let keys = Object.keys(vec)
+        .filter((k) => k !== "header" && k !== "length")
+        .map((k) => Number(k))
+        .filter((k) => Number.isFinite(k))
+        .sort((a, b) => a - b)
+    return keys.map((k) => vec[k]) as FloatArray[]
+}
+
+function get_int_segments(vec: any): IntArray[] {
+    if (!vec) return []
+    if (ArrayBuffer.isView(vec)) return [vec as IntArray]
+    if (Array.isArray(vec)) return vec as IntArray[]
+    if (typeof vec.length === "number") {
+        let segments: IntArray[] = []
+        for (let i = 0; i < vec.length; i++) {
+            if (vec[i]) segments.push(vec[i])
+        }
+        return segments
+    }
+    let keys = Object.keys(vec)
+        .filter((k) => k !== "header" && k !== "length")
+        .map((k) => Number(k))
+        .filter((k) => Number.isFinite(k))
+        .sort((a, b) => a - b)
+    return keys.map((k) => vec[k]) as IntArray[]
+}
+
 addEventListener("pysme_load", (event: any) => {
     let sme: SmeFile = event.detail.structure
     let updated: string[] = event.detail.updated
@@ -63,8 +101,8 @@ function get_mask_value() {
 }
 
 function get_segment() {
-    var seg: number = layout.sliders[0].active
-    return seg
+    if (!layout.sliders || !layout.sliders[0]) return 0
+    return layout.sliders[0].active
 }
 
 function get_data_index(seg: number, type: "linemask" | "contmask" | "spec" | "synth") {
@@ -179,13 +217,17 @@ function plot_sme(sme: any) {
         active_entry = store.spectra.find((entry) => entry.id === store.active_id) || store.spectra[0]
     }
     let base_sme = (active_entry && active_entry.sme) ? active_entry.sme : sme
-    if (!base_sme || !base_sme.wave || base_sme.wave.length === 0) {
+    let wave_segments = get_vector_segments(base_sme ? base_sme.wave : null)
+    if (!base_sme || wave_segments.length === 0) {
         reset_plot()
         return
     }
     current_plot_sme = base_sme
     reset_plot()
-    var nSegment = base_sme.wave.length
+    var nSegment = wave_segments.length
+    let base_spec_segments = get_vector_segments(base_sme.spec)
+    let base_synth_segments = get_vector_segments(base_sme.synth)
+    let base_mask_segments = get_int_segments(base_sme.mask)
 
     // Create Plot
     var annotations: any = {};
@@ -206,17 +248,12 @@ function plot_sme(sme: any) {
         // Annoying I know, but plotly doesn't seem to have good controls for the z order
         // Or Legend order for that matter
 
-        let base_y = null
-        if (base_sme.spec && base_sme.spec[seg]) {
-            base_y = base_sme.spec[seg]
-        } else if (base_sme.synth && base_sme.synth[seg]) {
-            base_y = base_sme.synth[seg]
-        }
-        let base_mask = base_sme.mask && base_sme.mask[seg] ? base_sme.mask[seg] : null
-        if (base_mask && base_y && base_mask.length === base_sme.wave[seg].length) {
+        let base_y = base_spec_segments[seg] || base_synth_segments[seg] || null
+        let base_mask = base_mask_segments[seg] || null
+        if (base_mask && base_y && base_mask.length === wave_segments[seg].length) {
             // Line mask
             var [x, y] = create_mask_points(
-                base_sme.wave[seg], base_y, base_mask, 1
+                wave_segments[seg], base_y, base_mask, 1
             )
 
             data.push({
@@ -237,7 +274,7 @@ function plot_sme(sme: any) {
 
             // Cont mask
             var [x, y] = create_mask_points(
-                base_sme.wave[seg], base_y, base_mask, 2
+                wave_segments[seg], base_y, base_mask, 2
             )
 
             data.push(
@@ -272,16 +309,20 @@ function plot_sme(sme: any) {
         }]
         for (let idx = 0; idx < spectra.length; idx++) {
             const entry = spectra[idx]
-            if (!entry.sme || !entry.sme.wave || !entry.sme.wave[seg]) continue
+            if (!entry.sme) continue
+            let entry_wave_segments = get_vector_segments(entry.sme.wave)
+            let entry_spec_segments = get_vector_segments(entry.sme.spec)
+            let entry_synth_segments = get_vector_segments(entry.sme.synth)
+            if (!entry_wave_segments[seg]) continue
             let entry_sme = entry.sme
             let is_active = !store || entry.id === (store as SpectrumStoreState).active_id
             let opacity = is_active ? 1 : 0.3
             let line_color = entry.color || (entry.kind === "obs" ? fmt["Obs"]["color"] : fmt["Syn"]["color"])
-            if (entry.kind === "obs" && entry_sme.spec) {
+            if (entry.kind === "obs" && entry_spec_segments[seg]) {
                 data.push({
                     type: "scattergl",
-                    x: entry_sme.wave[seg],
-                    y: entry_sme.spec[seg],
+                    x: entry_wave_segments[seg],
+                    y: entry_spec_segments[seg],
                     line: { "color": line_color },
                     mode: "lines+markers",
                     marker: { size: 3 },
@@ -296,19 +337,20 @@ function plot_sme(sme: any) {
                 }
                 counter += 1
             }
-            if (entry.kind === "synth" && entry_sme.synth) {
+            if (entry.kind === "synth" && entry_synth_segments[seg]) {
                 let data_synth: FloatArray;
-                if (entry_sme.telluric) {
-                    data_synth = new Float64Array(entry_sme.synth[seg].length)
-                    for (let i = 0; i < entry_sme.synth[seg].length; i++) {
-                        data_synth[i] = entry_sme.synth[seg][i] * entry_sme.telluric[seg][i];
+                if (entry_sme.telluric && get_vector_segments(entry_sme.telluric)[seg]) {
+                    let tell_seg = get_vector_segments(entry_sme.telluric)[seg]
+                    data_synth = new Float64Array(entry_synth_segments[seg].length)
+                    for (let i = 0; i < entry_synth_segments[seg].length; i++) {
+                        data_synth[i] = entry_synth_segments[seg][i] * tell_seg[i];
                     }
                 } else {
-                    data_synth = entry_sme.synth[seg]
+                    data_synth = entry_synth_segments[seg]
                 }
                 data.push({
                     type: "scattergl",
-                    x: entry_sme.wave[seg],
+                    x: entry_wave_segments[seg],
                     y: data_synth,
                     name: entry.name,
                     line: { "color": line_color },
@@ -327,8 +369,8 @@ function plot_sme(sme: any) {
         }
         if (show_annotations && base_sme.linelist.data) {
             var lines = base_sme.linelist.data
-            var wmin: number = base_sme.wave[seg][0]
-            var wmax: number = base_sme.wave[seg][base_sme.wave[seg].length - 1]
+            var wmin: number = wave_segments[seg][0]
+            var wmax: number = wave_segments[seg][wave_segments[seg].length - 1]
             var vrad = 0
             if (base_sme.header.vrad) vrad = base_sme.header.vrad[seg]
             wmin *= 1 - vrad / 3e5

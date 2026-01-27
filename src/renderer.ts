@@ -593,6 +593,7 @@ function build_observed_sme_from_segments(segments: { [id: number]: { wave: numb
 
 function get_vector_segments(vec: any): FloatArray[] {
     if (!vec) return []
+    if (ArrayBuffer.isView(vec)) return [vec as FloatArray]
     if (Array.isArray(vec)) return vec
     if (typeof vec.length === "number") {
         let segments: FloatArray[] = []
