@@ -233,3 +233,56 @@ $theme-colors: (
     text-overflow: ellipsis;
     vertical-align: bottom;
 }
+
+// Topbar action icons: center align with sidebar brand icon and slightly larger
+#content .topbar .navbar-nav.mr-auto {
+    align-items: center;
+}
+#content .topbar .navbar-nav.mr-auto .nav-link {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    height: $topbar-base-height;
+    transform: translateY(3px);
+}
+#content .topbar .navbar-nav.mr-auto .nav-link i {
+    font-size: 1.35rem;
+    line-height: 1;
+    margin-bottom: 0.15rem;
+}
+#content .topbar .navbar-nav.mr-auto .nav-link span {
+    font-size: 0.7rem;
+}
+
+.sidebar-logo {
+    width: 5.5rem;
+    height: 5.5rem;
+    object-fit: contain;
+    display: block;
+    margin-top: 1px;
+}
+.sidebar .sidebar-brand .sidebar-brand-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+.sidebar .sidebar-brand {
+    height: auto;
+    padding-top: 0.0rem;
+    padding-bottom: 0.0rem;
+}
+.sidebar hr.sidebar-divider {
+    margin-top: 0.33rem;
+}
+
+#wrapper #content-wrapper {
+    background-color: $white;
+}
+#content .container-fluid {
+    background-color: $gray-100;
+    padding-top: 1rem;
+    padding-bottom: 1.5rem;
+}

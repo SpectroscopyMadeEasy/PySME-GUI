@@ -1,5 +1,6 @@
 
 
+const { shell } = require('electron')
 var LinelistTable: any = null
 
 addEventListener("pysme_load", (event: any) => {
@@ -40,7 +41,7 @@ ButtonLinelistLoad.addEventListener("click", async (event) => {
 
 var ButtonLinelistRequestVald = document.getElementById("btn-linelist-request-vald") as HTMLButtonElement
 ButtonLinelistRequestVald.addEventListener("click", (event) => {
-    //TODO
+    shell.openExternal("https://vald.astro.uu.se/")
 })
 
 function show_linelist(sme: SmeFile) {
