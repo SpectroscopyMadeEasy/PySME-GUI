@@ -12,7 +12,39 @@ def main(fname_in, fname_out, fit_parameters, log_file=None):
     if log_file is not None:
         start_logging(log_file)
     sme = SME_Structure.load(fname_in)
+    try:
+        import numpy as np
+        mask = sme.mask
+        if mask is None:
+            print("MASK_SUMMARY input: None")
+        else:
+            segments = mask.segments if hasattr(mask, "segments") else mask
+            if isinstance(segments, np.ndarray):
+                segments = [segments]
+            summary = []
+            for idx, seg in enumerate(segments):
+                vals, counts = np.unique(np.asarray(seg), return_counts=True)
+                summary.append((idx, dict(zip(vals.tolist(), counts.tolist()))))
+            print("MASK_SUMMARY input:", summary)
+    except Exception as exc:
+        print("MASK_SUMMARY input: error", exc)
     sme = solve(sme, fit_parameters)
+    try:
+        import numpy as np
+        mask = sme.mask
+        if mask is None:
+            print("MASK_SUMMARY output: None")
+        else:
+            segments = mask.segments if hasattr(mask, "segments") else mask
+            if isinstance(segments, np.ndarray):
+                segments = [segments]
+            summary = []
+            for idx, seg in enumerate(segments):
+                vals, counts = np.unique(np.asarray(seg), return_counts=True)
+                summary.append((idx, dict(zip(vals.tolist(), counts.tolist()))))
+            print("MASK_SUMMARY output:", summary)
+    except Exception as exc:
+        print("MASK_SUMMARY output: error", exc)
     sme.save(fname_out)
 
 

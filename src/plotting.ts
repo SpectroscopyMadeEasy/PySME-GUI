@@ -35,6 +35,7 @@ var data_index: { [id: string]: { [id: number]: number } } = {
 }
 // Not showing annotations is a lot faster
 var show_annotations = true;
+var last_view_ranges: { x?: [number, number]; y?: [number, number] } = {}
 
 function get_vector_segments(vec: any): FloatArray[] {
     if (!vec) return []
@@ -91,6 +92,17 @@ function reset_plot() {
         contmask: {},
         spec: {},
         synth: {}
+    }
+}
+
+function clear_plot() {
+    reset_plot()
+    if (graphDiv) {
+        Plotly.react(graphDiv, [], {
+            xaxis: { title: "Wavelength [Å]" },
+            yaxis: { title: "Intensity" },
+            showlegend: false,
+        })
     }
 }
 
@@ -183,22 +195,26 @@ function set_mask(sme: SmeFile, range: [number, number]) {
 
 function create_mask_points(x: FloatArray, y: FloatArray, mask: IntArray, value: number) {
     // Creates the points that define the outer edge of the mask region
-    y = y.map((v: number, i: number) => {
-        if (mask[i] == value) {
-            return v
-        } else {
-            return 0
+    const is_bigint = typeof mask[0] === "bigint"
+    const mask_value = is_bigint ? BigInt(value) : value
+    const is_match = (v: any) => {
+        if (is_bigint) {
+            return (v & (mask_value as bigint)) !== BigInt(0)
         }
-    })
+        return ((v as number) & (mask_value as number)) !== 0
+    }
+    const active = Array.from(mask as any, (v: any) => is_match(v))
+
+    y = y.map((v: number, i: number) => (active[i] ? v : 0))
 
     x = x.map((v: number, i: number, a: FloatArray) => {
         if ((i == 0) || (i == a.length - 1)) {
             return v
         } else {
-            if ((mask[i] != value) && (mask[i + 1] == value)) {
+            if ((!active[i]) && (active[i + 1])) {
                 return a[i + 1]
             } else {
-                if ((mask[i] != value) && (mask[i - 1] == value)) {
+                if ((!active[i]) && (active[i - 1])) {
                     return a[i - 1]
                 } else {
                     return v
@@ -218,8 +234,19 @@ function plot_sme(sme: any) {
     }
     let base_sme = (active_entry && active_entry.sme) ? active_entry.sme : sme
     let wave_segments = get_vector_segments(base_sme ? base_sme.wave : null)
+    if ((!base_sme || wave_segments.length === 0) && store && store.spectra.length > 0) {
+        for (const entry of store.spectra) {
+            if (!entry.sme) continue
+            let segments = get_vector_segments(entry.sme.wave)
+            if (segments.length > 0) {
+                base_sme = entry.sme
+                wave_segments = segments
+                break
+            }
+        }
+    }
     if (!base_sme || wave_segments.length === 0) {
-        reset_plot()
+        clear_plot()
         return
     }
     current_plot_sme = base_sme
@@ -307,8 +334,15 @@ function plot_sme(sme: any) {
             locked: false,
             sme: base_sme,
         }]
-        for (let idx = 0; idx < spectra.length; idx++) {
-            const entry = spectra[idx]
+        const active_id = store ? store.active_id : null
+        const ordered_spectra = spectra.slice().sort((a, b) => {
+            const a_active = a.id === active_id
+            const b_active = b.id === active_id
+            if (a_active === b_active) return 0
+            return a_active ? 1 : -1
+        })
+        for (let idx = 0; idx < ordered_spectra.length; idx++) {
+            const entry = ordered_spectra[idx]
             if (!entry.sme) continue
             let entry_wave_segments = get_vector_segments(entry.sme.wave)
             let entry_spec_segments = get_vector_segments(entry.sme.spec)
@@ -526,7 +560,7 @@ function plot_sme(sme: any) {
         steps: steps,
     }
 
-    layout = {
+    const base_layout: any = {
         xaxis: { title: "Wavelength [Å]" },
         yaxis: { title: "Intensity" },
         showlegend: true,
@@ -536,6 +570,13 @@ function plot_sme(sme: any) {
         sliders: [slider],
         annotations: annotations[0]
     }
+    if (last_view_ranges.x) {
+        base_layout.xaxis = { ...base_layout.xaxis, range: last_view_ranges.x }
+    }
+    if (last_view_ranges.y) {
+        base_layout.yaxis = { ...base_layout.yaxis, range: last_view_ranges.y }
+    }
+    layout = base_layout
 
     var buttons = [["toImage", "zoom2d", "pan2d", "select2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"]];
     Plotly.react(graphDiv, data, layout, { responsive: true, displayModeBar: true, modeBarButtons: buttons });
@@ -552,9 +593,10 @@ function plot_sme(sme: any) {
         graphDiv.on('plotly_relayout', (event: any) => {
             if (event && typeof event["xaxis.range[0]"] !== "undefined" && typeof event["xaxis.range[1]"] !== "undefined") {
                 var range: [number, number] = [event["xaxis.range[0]"], event["xaxis.range[1]"]]
-                if (current_plot_sme) {
-                    set_mask(current_plot_sme, range)
-                }
+                last_view_ranges.x = range
+            }
+            if (typeof event["yaxis.range[0]"] !== "undefined" && typeof event["yaxis.range[1]"] !== "undefined") {
+                last_view_ranges.y = [event["yaxis.range[0]"], event["yaxis.range[1]"]]
             }
         })
         initial_setup = false

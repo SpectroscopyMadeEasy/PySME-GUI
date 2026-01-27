@@ -319,6 +319,35 @@ function clone_float_array(value: any) {
     return value
 }
 
+function summarize_mask(mask: any): { segments: number; counts: { [id: number]: number } } | null {
+    if (!mask) return null
+    let segments = 0
+    let counts: { [id: number]: number } = {}
+    const add_counts = (arr: any) => {
+        if (!arr || typeof arr.length !== "number") return
+        for (let i = 0; i < arr.length; i++) {
+            let v = Number(arr[i])
+            if (!Number.isFinite(v)) continue
+            counts[v] = (counts[v] || 0) + 1
+        }
+    }
+    if (ArrayBuffer.isView(mask)) {
+        segments = 1
+        add_counts(mask)
+    } else if (Array.isArray(mask)) {
+        segments = mask.length
+        mask.forEach((seg) => add_counts(seg))
+    } else if (typeof mask === "object") {
+        let keys = Object.keys(mask)
+            .filter((k) => k !== "header" && k !== "length")
+            .map((k) => Number(k))
+            .filter((k) => Number.isFinite(k))
+        segments = keys.length
+        keys.forEach((k) => add_counts(mask[k]))
+    }
+    return { segments, counts }
+}
+
 function sync_fit_params_from_active(source: SmeFile, target: SmeFile) {
     target.header.teff = source.header.teff
     target.header.logg = source.header.logg
@@ -1034,6 +1063,9 @@ ButtonFit.addEventListener('click', async (event) => {
         }
         target_entry.sme.header.fitparameters = fitparams_raw
         let fit_result = await fit_spectrum(target_entry.sme)
+        console.log("Fit mask summary - input:", summarize_mask(target_entry.sme.mask), "output:", summarize_mask(fit_result.mask))
+        console.log("Fit mask input raw:", target_entry.sme.mask)
+        console.log("Fit mask output raw:", fit_result.mask)
         let fit_entry = add_fit_result_spectrum(spectrum_store, undefined, fit_result)
         activate_spectrum_entry(fit_entry)
         render_spectrum_list()
