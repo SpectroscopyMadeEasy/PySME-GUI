@@ -91,6 +91,30 @@ function save_iliffe_vector(vec: any[]) {
     return save_multiple_data_extension(header, data)
 }
 
+function is_typed_array(value: any) {
+    return value && ArrayBuffer.isView(value) && !(value instanceof DataView)
+}
+
+function normalize_header_value(value: any): any {
+    if (is_typed_array(value)) {
+        return Array.from(value as any)
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => normalize_header_value(item))
+    }
+    return value
+}
+
+function normalize_header(header: any) {
+    let result: any = {}
+    for (const key in header) {
+        if (header.hasOwnProperty(key)) {
+            result[key] = normalize_header_value(header[key])
+        }
+    }
+    return result
+}
+
 async function load_file(filename: string) {
     console.log("Loading file")
     var tmpout = tmp.fileSync({ postfix: ".json" });
@@ -134,7 +158,7 @@ async function load_file(filename: string) {
 }
 
 async function save_file(filename: string, sme: any) {
-    var result: any = { "header": sme.header }
+    var result: any = { "header": normalize_header(sme.header) }
     for (const key in sme) {
         if (sme.hasOwnProperty(key)) {
             if (key == "header") continue;
@@ -145,8 +169,19 @@ async function save_file(filename: string, sme: any) {
                 }
                 continue;
             }
+            if (key === "linelist" && element && element["data"]) {
+                let header = normalize_header(element["header"] || {})
+                if (!header["__module__"]) header["__module__"] = "flex.extensions.tabledata"
+                if (!header["__class__"]) header["__class__"] = "JSONTableExtension"
+                if (!header["__header__"]) header["__header__"] = true
+                result[key] = save_table_extension(header, element)
+                continue;
+            }
             const ext_module = element["header"]["__module__"];
             const ext_class = element["header"]["__class__"];
+            if (!ext_module || !ext_class) {
+                continue;
+            }
             let ext: any = {};
             if ((ext_module == "flex.extensions.bindata") && (ext_class == "BinaryDataExtension")) {
                 ext = save_binary_data_extension(element["header"], element)

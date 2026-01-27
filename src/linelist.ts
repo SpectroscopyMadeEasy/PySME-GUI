@@ -32,6 +32,20 @@ ButtonLinelistLoad.addEventListener("click", async (event) => {
                 sme.system_info.header = {}
             }
             sme.system_info.header["linelist_file"] = fname
+            let store: any = (window as any).spectrum_store
+            if (store && Array.isArray(store.spectra)) {
+                store.spectra.forEach((entry: any) => {
+                    if (!entry || !entry.sme) return
+                    entry.sme.linelist = { header: sme.linelist.header, data: sme.linelist.data }
+                    if (!entry.sme.system_info) {
+                        entry.sme.system_info = { header: {} }
+                    }
+                    if (!entry.sme.system_info.header) {
+                        entry.sme.system_info.header = {}
+                    }
+                    entry.sme.system_info.header["linelist_file"] = fname
+                })
+            }
             cast_load_event(sme, "linelist")
         } catch (err) {
             console.error(err)
@@ -48,6 +62,7 @@ function show_linelist(sme: SmeFile) {
     let rows: any[] = sme.linelist.data || []
     let columns: any[] = []
     let referenceIndex = -1
+    let wlcentIndex = -1
 
     let keySet = new Set<string>()
     rows.forEach((row) => {
@@ -79,6 +94,10 @@ function show_linelist(sme: SmeFile) {
                 return text
             }
         }
+        if (key === "wlcent") {
+            wlcentIndex = columns.length
+            column.type = "num"
+        }
         return column
     })
 
@@ -99,6 +118,21 @@ function show_linelist(sme: SmeFile) {
     tableEl.append(thead)
     tableEl.append('<tbody></tbody>')
 
+    let columnDefs: any[] = []
+    if (referenceIndex >= 0) {
+        columnDefs.push({
+            targets: referenceIndex,
+            width: "260px",
+            className: "linelist-reference"
+        })
+    }
+    if (wlcentIndex >= 0) {
+        columnDefs.push({
+            targets: wlcentIndex,
+            type: "num"
+        })
+    }
+
     let table = tableEl.DataTable({
         destroy: true,
         responsive: false,
@@ -108,11 +142,8 @@ function show_linelist(sme: SmeFile) {
         pageLength: 10,
         data: rows,
         columns: columns,
-        columnDefs: referenceIndex >= 0 ? [{
-            targets: referenceIndex,
-            width: "260px",
-            className: "linelist-reference"
-        }] : []
+        order: wlcentIndex >= 0 ? [[wlcentIndex, "asc"]] : [],
+        columnDefs: columnDefs
     });
     LinelistTable = table
     move_linelist_controls(table)

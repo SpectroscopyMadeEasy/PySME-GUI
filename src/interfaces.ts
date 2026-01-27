@@ -29,6 +29,8 @@ type IntArray = Int16Array | Int8Array | Int32Array | BigInt64Array | Uint8Array
 type FloatArray = Float32Array | Float64Array
 type Vector = { header: Dict;[id: number]: FloatArray }
 type IntVector = { header: Dict;[id: number]: IntArray }
+type FloatVector = FloatArray[] | Vector
+type IntVectorLike = IntArray[] | IntVector
 
 
 type AbundanceFormat = "H=12" | "sme" | "n/nTot" | "n/nH";
@@ -76,7 +78,7 @@ interface NLTE {
     flags: IntArray;
 }
 
-type SystemInfo = { [id: string]: string };
+type SystemInfo = { [id: string]: string | number };
 
 type VradFlag = "fix" | "whole" | "each" | "none";
 type CscaleFlag = "fix" | "none" | "constant" | "linear";
@@ -85,7 +87,7 @@ interface SmeFile {
     header: {
         vrad: FloatArray;
         cscale: FloatArray[];
-        wran: FloatArray[];
+        wran: Array<FloatArray | number[]>;
         citation_info: string;
         teff: number;
         logg: number;
@@ -112,16 +114,16 @@ interface SmeFile {
         header: Abundance;
         data: FloatArray;
     },
-    wave: Vector;
-    spec: Vector;
-    uncs: Vector;
-    mask: IntVector;
-    synth: Vector;
-    cont: Vector;
-    telluric: Vector;
+    wave: FloatVector;
+    spec: FloatVector;
+    uncs: FloatVector;
+    mask: IntVectorLike;
+    synth: FloatVector;
+    cont: FloatVector;
+    telluric: FloatVector;
     linelist: {
         header: LineList;
-        data: { [id: string]: any };
+        data: { [id: string]: any }[];
     };
     atmo: {
         header: Atmosphere;
@@ -139,4 +141,30 @@ interface SmeFile {
     system_info: {
         header: SystemInfo
     }
+}
+
+type SpectrumKind = "synth" | "obs";
+type SpectrumMode = "synthesize" | "fit";
+type SpectrumSource = "file" | "params";
+interface SpectrumEntry {
+    id: string;
+    name: string;
+    kind: SpectrumKind;
+    source: SpectrumSource;
+    created_at: number;
+    updated_at: number;
+    color: string;
+    locked: boolean;
+    sme: SmeFile | null;
+}
+interface SpectrumStoreState {
+    mode: SpectrumMode;
+    spectra: SpectrumEntry[];
+    active_id: string | null;
+    fit_target_id: string | null;
+    counters: {
+        synth: number;
+        obs: number;
+        fit: number;
+    };
 }

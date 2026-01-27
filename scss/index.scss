@@ -300,6 +300,86 @@ $theme-colors: (
     min-width: 0;
 }
 
+.spectrum-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 0.6rem;
+    flex: 0 0 auto;
+    max-height: 160px;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+.spectrum-mask-controls {
+    flex: 0 0 auto;
+    margin-top: 0.35rem;
+    padding-top: 0.25rem;
+    background: $white;
+    z-index: 2;
+}
+#nav-spectrum .card-body {
+    min-height: 0;
+}
+#nav-spectrum #div-graph {
+    flex: 1 1 auto;
+    min-height: 200px;
+}
+.spectrum-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.6rem;
+    flex-wrap: wrap;
+}
+.spectrum-fit-target {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.spectrum-fit-target label {
+    margin-bottom: 0;
+    font-size: 0.75rem;
+    color: $gray-600;
+    white-space: nowrap;
+}
+.spectrum-fit-target .custom-select {
+    min-width: 180px;
+}
+.spectrum-list-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.spectrum-list-row.inactive {
+    opacity: 0.7;
+}
+.spectrum-list-row input[type="radio"] {
+    margin-top: 0;
+}
+.spectrum-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    flex: 0 0 auto;
+}
+.spectrum-name {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.spectrum-kind {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.5rem;
+    background: $gray-200;
+    color: $gray-700;
+    white-space: nowrap;
+}
+.spectrum-delete {
+    white-space: nowrap;
+}
+
 #wrapper #content-wrapper {
     background-color: $white;
 }

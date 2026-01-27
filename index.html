@@ -111,6 +111,12 @@
           <!-- Topbar Navbar -->
           <ul class="navbar-nav mr-auto">
             <li class="nav-item">
+              <span class="nav-link" id="btn-new-spectrum">
+                <i class="fas fa-plus"></i>
+                <span>New</span>
+              </span>
+            </li>
+            <li class="nav-item">
               <span class="nav-link" id="btn-load">
                 <i class="fas fa-file-upload"></i>
                 <span>Load File</span>
@@ -180,9 +186,20 @@
                 </div>
                 <!-- Card Body -->
                 <div class="card-body d-flex" style="flex-flow:column; height: 100%;">
+                  <div class="spectrum-controls">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Spectrum mode">
+                      <button type="button" class="btn btn-outline-primary active" id="btn-mode-synth">Synthesize</button>
+                      <button type="button" class="btn btn-outline-primary" id="btn-mode-fit">Fit</button>
+                    </div>
+                    <div class="spectrum-fit-target" id="spectrum-fit-target">
+                      <label for="select-fit-target">Fit target:</label>
+                      <select id="select-fit-target" class="custom-select custom-select-sm"></select>
+                    </div>
+                  </div>
+                  <div class="spectrum-list" id="spectrum-list"></div>
                   <div class="mb-2" id="div-graph" style="flex-grow: 1;">
                   </div>
-                  <div>
+                  <div class="spectrum-mask-controls">
                     <button class="btn btn-outline-secondary" id="btn-mask-bad">Bad Pixel</button>
                     <button class="btn btn-linemask" id="btn-mask-line">Line Pixel</button>
                     <button class="btn btn-contmask" id="btn-mask-cont">Cont Pixel</button>

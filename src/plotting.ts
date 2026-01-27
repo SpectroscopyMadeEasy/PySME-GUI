@@ -4,15 +4,27 @@ import { Main } from "electron";
 var fmt = {
     Obs: { color: "#1f77b4", linestyle: "solid" },
     Syn: { color: "#ff7f0e", linestyle: "solid", marker: "" },
-    LineMask: { facecolor: "#bcbd22", alpha: 1 },
-    ContMask: { facecolor: "#d62728", alpha: 1 },
+    LineMask: { facecolor: "#bcbd22", alpha: 0.3 },
+    ContMask: { facecolor: "#d62728", alpha: 0.3 },
     fontsize: 16,
+}
+
+function hex_to_rgba(hex: string, alpha: number) {
+    let value = hex.replace("#", "")
+    if (value.length === 3) {
+        value = value.split("").map((c) => c + c).join("")
+    }
+    let r = parseInt(value.slice(0, 2), 16)
+    let g = parseInt(value.slice(2, 4), 16)
+    let b = parseInt(value.slice(4, 6), 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 type mask_modes = "bad" | "line" | "cont";
 var mask_mode: mask_modes = "cont"
 var initial_setup = true
 var graphDiv: any = document.getElementById('div-graph') as HTMLDivElement;
+var current_plot_sme: SmeFile | null = null;
 var data: any = []
 var layout: any = {}
 var data_index: { [id: string]: { [id: number]: number } } = {
@@ -137,12 +149,19 @@ function create_mask_points(x: FloatArray, y: FloatArray, mask: IntArray, value:
 }
 
 function plot_sme(sme: any) {
-    if (!sme || !sme.wave || sme.wave.length === 0) {
+    let store: SpectrumStoreState | null = (window as any).spectrum_store || null
+    let active_entry: SpectrumEntry | null = null
+    if (store && store.spectra.length > 0) {
+        active_entry = store.spectra.find((entry) => entry.id === store.active_id) || store.spectra[0]
+    }
+    let base_sme = (active_entry && active_entry.sme) ? active_entry.sme : sme
+    if (!base_sme || !base_sme.wave || base_sme.wave.length === 0) {
         reset_plot()
         return
     }
+    current_plot_sme = base_sme
     reset_plot()
-    var nSegment = sme.wave.length
+    var nSegment = base_sme.wave.length
 
     // Create Plot
     var annotations: any = {};
@@ -163,17 +182,17 @@ function plot_sme(sme: any) {
         // Annoying I know, but plotly doesn't seem to have good controls for the z order
         // Or Legend order for that matter
 
-        if (sme.mask) {
+        if (base_sme.mask) {
             // Line mask
             var [x, y] = create_mask_points(
-                sme.wave[seg], sme.spec[seg], sme.mask[seg], 1
+                base_sme.wave[seg], base_sme.spec[seg], base_sme.mask[seg], 1
             )
 
             data.push({
                 type: "scattergl",
                 x: x,
                 y: y,
-                fillcolor: fmt["LineMask"]["facecolor"],
+                fillcolor: hex_to_rgba(fmt["LineMask"]["facecolor"], fmt["LineMask"]["alpha"]),
                 fill: "tozeroy",
                 mode: "none",
                 name: "Line Mask",
@@ -187,7 +206,7 @@ function plot_sme(sme: any) {
 
             // Cont mask
             var [x, y] = create_mask_points(
-                sme.wave[seg], sme.spec[seg], sme.mask[seg], 2
+                base_sme.wave[seg], base_sme.spec[seg], base_sme.mask[seg], 2
             )
 
             data.push(
@@ -195,7 +214,7 @@ function plot_sme(sme: any) {
                     type: "scattergl",
                     x: x,
                     y: y,
-                    fillcolor: fmt["ContMask"]["facecolor"],
+                    fillcolor: hex_to_rgba(fmt["ContMask"]["facecolor"], fmt["ContMask"]["alpha"]),
                     fill: "tozeroy",
                     mode: "none",
                     name: "Continuum Mask",
@@ -209,57 +228,78 @@ function plot_sme(sme: any) {
             counter += 1
         }
 
-        if (sme.spec) {
-            //Observation
-            data.push({
-                type: "scattergl",
-                x: sme.wave[seg],
-                y: sme.spec[seg],
-                line: { "color": fmt["Obs"]["color"] },
-                mode: "lines+markers",
-                marker: { size: 3 },
-                name: "Observation",
-                legendgroup: 0,
-                visible: 0 == seg,
-            })
-            visible.push(seg)
-            data_index["spec"][seg] = counter
-            counter += 1
-        }
-        if (sme.synth) {
-            // Synthetic
-            let data_synth:FloatArray;
-            if (sme.telluric) {
-                data_synth = new Float64Array(sme.synth[seg].length)
-                for (let i = 0; i < sme.synth[seg].length; i++) {
-                    data_synth[i] = sme.synth[seg][i] * sme.telluric[seg][i];
+        let spectra: SpectrumEntry[] = store ? store.spectra : [{
+            id: "single",
+            name: "Synthetic",
+            kind: "synth",
+            source: "file",
+            created_at: 0,
+            updated_at: 0,
+            color: fmt["Syn"]["color"],
+            locked: false,
+            sme: base_sme,
+        }]
+        for (let idx = 0; idx < spectra.length; idx++) {
+            const entry = spectra[idx]
+            if (!entry.sme || !entry.sme.wave || !entry.sme.wave[seg]) continue
+            let entry_sme = entry.sme
+            let is_active = !store || entry.id === (store as SpectrumStoreState).active_id
+            let opacity = is_active ? 1 : 0.3
+            let line_color = entry.color || (entry.kind === "obs" ? fmt["Obs"]["color"] : fmt["Syn"]["color"])
+            if (entry.kind === "obs" && entry_sme.spec) {
+                data.push({
+                    type: "scattergl",
+                    x: entry_sme.wave[seg],
+                    y: entry_sme.spec[seg],
+                    line: { "color": line_color },
+                    mode: "lines+markers",
+                    marker: { size: 3 },
+                    name: entry.name,
+                    legendgroup: idx + 1,
+                    opacity: opacity,
+                    visible: 0 == seg,
+                })
+                visible.push(seg)
+                if (is_active) {
+                    data_index["spec"][seg] = counter
                 }
-                console.log(data_synth)
-            } else {
-                data_synth = sme.synth[seg]
+                counter += 1
             }
-
-            data.push({
-                type: "scattergl",
-                x: sme.wave[seg],
-                y: data_synth,
-                name: "Synthethic",
-                line: { "color": fmt["Syn"]["color"] },
-                mode: "lines+markers",
-                marker: { size: 3 },
-                legendgroup: 1,
-                visible: 0 == seg,
-            })
-            visible.push(seg)
-            data_index["synth"][seg] = counter
-            counter += 1
+            if (entry.kind === "synth" && entry_sme.synth) {
+                let data_synth: FloatArray;
+                if (entry_sme.telluric) {
+                    data_synth = new Float64Array(entry_sme.synth[seg].length)
+                    for (let i = 0; i < entry_sme.synth[seg].length; i++) {
+                        data_synth[i] = entry_sme.synth[seg][i] * entry_sme.telluric[seg][i];
+                    }
+                } else {
+                    data_synth = entry_sme.synth[seg]
+                }
+                data.push({
+                    type: "scattergl",
+                    x: entry_sme.wave[seg],
+                    y: data_synth,
+                    name: entry.name,
+                    line: { "color": line_color },
+                    mode: "lines+markers",
+                    marker: { size: 3 },
+                    legendgroup: idx + 1,
+                    opacity: opacity,
+                    visible: 0 == seg,
+                })
+                visible.push(seg)
+                if (is_active) {
+                    data_index["synth"][seg] = counter
+                }
+                counter += 1
+            }
         }
-        if (show_annotations && sme.linelist.data) {
-            var lines = sme.linelist.data
-            var wmin: number = sme.wave[seg][0]
-            var wmax: number = sme.wave[seg][sme.wave[seg].length - 1]
+        if (show_annotations && base_sme.linelist.data) {
+            var lines = base_sme.linelist.data
+            var wmin: number = base_sme.wave[seg][0]
+            var wmax: number = base_sme.wave[seg][base_sme.wave[seg].length - 1]
             var vrad = 0
-            if (sme.header.vrad) vrad = sme.header.vrad[seg]
+            if (base_sme.header.vrad) vrad = base_sme.header.vrad[seg]
             wmin *= 1 - vrad / 3e5
             wmax *= 1 - vrad / 3e5
 
@@ -326,7 +366,7 @@ function plot_sme(sme: any) {
                 // Find the clostest data point
                 var i = 0;
                 var idx = -1;
-                var closest = sme.wave[seg].reduce((acc: number, value: number) => {
+                var closest = base_sme.wave[seg].reduce((acc: number, value: number) => {
                     i += 1;
                     if (Math.abs(value - x_loc) < acc) {
                         idx = i;
@@ -337,11 +377,11 @@ function plot_sme(sme: any) {
                 }, wmax)
 
                 if (idx != -1) {
-                    x_loc = sme.wave[seg][idx]
+                    x_loc = base_sme.wave[seg][idx]
 
-                    if (sme.synth) {
-                        y_loc = sme.synth[seg][idx]
-                        ay = sme.synth[seg].reduce((p:number, c:number) => {
+                    if (base_sme.synth) {
+                        y_loc = base_sme.synth[seg][idx]
+                        ay = base_sme.synth[seg].reduce((p:number, c:number) => {
                             if (p > c) {
                                 return p;
                             }
@@ -349,9 +389,9 @@ function plot_sme(sme: any) {
                         })
                         ay = ay * 1.1;
                     } else {
-                        if (sme.spec) {
-                            y_loc = sme.spec[seg][idx]
-                            ay = sme.spec[seg].reduce((p:number, c:number) => {
+                        if (base_sme.spec) {
+                            y_loc = base_sme.spec[seg][idx]
+                            ay = base_sme.spec[seg].reduce((p:number, c:number) => {
                                 if (p > c) {
                                     return p;
                                 }
@@ -388,8 +428,8 @@ function plot_sme(sme: any) {
     for (let seg = 0; seg < nSegment; seg++) {
         // Slider Steps
         var visibility = Array.apply(null, Array(visible.length)).map(function (x: any, i: number) { return visible[i] == seg })
-        var wmin: number = sme.wave[seg][0]
-        var wmax: number = sme.wave[seg][sme.wave[seg].length - 1]
+        var wmin: number = base_sme.wave[seg][0]
+        var wmax: number = base_sme.wave[seg][base_sme.wave[seg].length - 1]
         var step = {
             label: `Segment ${seg}`,
             method: "update",
@@ -431,7 +471,9 @@ function plot_sme(sme: any) {
         graphDiv.on('plotly_selected', (event: any) => {
             if (event) {
                 var range: [number, number] = event.range.x
-                set_mask(sme, range)
+                if (current_plot_sme) {
+                    set_mask(current_plot_sme, range)
+                }
             }
         })
         initial_setup = false
