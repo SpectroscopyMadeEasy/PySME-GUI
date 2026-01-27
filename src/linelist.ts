@@ -44,66 +44,82 @@ ButtonLinelistRequestVald.addEventListener("click", (event) => {
 })
 
 function show_linelist(sme: SmeFile) {
-    $(document).ready(function () {
-        let rows: any[] = sme.linelist.data || []
-        let columns: any[] = []
-        let referenceIndex = -1
-        if (rows.length > 0) {
-            let keySet = new Set<string>()
-            rows.forEach((row) => {
-                if (!row) return
-                Object.keys(row).forEach((k) => keySet.add(k))
-            })
-            let keys = Array.from(keySet)
-            columns = keys.map((key) => {
-                let column: any = { title: key, data: key }
-                if (key === "reference") {
-                    referenceIndex = columns.length
-                    column.className = "linelist-reference"
-                    column.render = function (data: any, type: string) {
-                        if (data === null || data === undefined) return ""
-                        let text = String(data).replace(/\s+/g, " ").trim()
-                        if (type === "display") {
-                            return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
-                        }
-                        return text
-                    }
+    let rows: any[] = sme.linelist.data || []
+    let columns: any[] = []
+    let referenceIndex = -1
+
+    let keySet = new Set<string>()
+    rows.forEach((row) => {
+        if (!row) return
+        Object.keys(row).forEach((k) => keySet.add(k))
+    })
+    let keys = Array.from(keySet)
+    columns = keys.map((key) => {
+        let column: any = { title: key, data: key }
+        if (key === "reference") {
+            referenceIndex = columns.length
+            column.className = "linelist-reference"
+            column.render = function (data: any, type: string) {
+                if (data === null || data === undefined) return ""
+                let text = String(data).replace(/\s+/g, " ").trim()
+                if (type === "display") {
+                    return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
                 }
-                if (key === "term_lower" || key === "term_upper" || key === "term_higher") {
-                    column.render = function (data: any, type: string) {
-                        if (data === null || data === undefined) return ""
-                        let text = String(data).replace(/\s+/g, " ").trim()
-                        if (type === "display") {
-                            return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
-                        }
-                        return text
-                    }
-                }
-                return column
-            })
+                return text
+            }
         }
-        let table = $('#table-linelist').DataTable({
-            destroy: true,
-            responsive: false,
-            scrollX: false,
-            scrollCollapse: false,
-            autoWidth: true,
-            data: rows,
-            columns: columns,
-            columnDefs: referenceIndex >= 0 ? [{
-                targets: referenceIndex,
-                width: "260px",
-                className: "linelist-reference"
-            }] : []
-        });
-        LinelistTable = table
-        // Ensure header/body alignment after render and on layout changes
-        setTimeout(() => { adjust_linelist_table(table); }, 0);
-        setTimeout(() => { adjust_linelist_table(table); }, 200);
-        setTimeout(() => { adjust_linelist_table(table); }, 500);
-        $(window).off("resize.linelist").on("resize.linelist", () => {
-            if (LinelistTable) adjust_linelist_table(LinelistTable);
-        });
+        if (key === "term_lower" || key === "term_upper" || key === "term_higher") {
+            column.render = function (data: any, type: string) {
+                if (data === null || data === undefined) return ""
+                let text = String(data).replace(/\s+/g, " ").trim()
+                if (type === "display") {
+                    return `<span class="linelist-truncate" title="${text.replace(/\"/g, '&quot;')}">${text}</span>`
+                }
+                return text
+            }
+        }
+        return column
+    })
+
+    if (columns.length === 0) {
+        return
+    }
+
+    let tableEl = $('#table-linelist')
+    if (LinelistTable) {
+        LinelistTable.destroy(false)
+        LinelistTable = null
+    }
+    tableEl.empty()
+    let thead = $('<thead><tr></tr></thead>')
+    keys.forEach((key) => {
+        thead.find('tr').append(`<th>${key}</th>`)
+    })
+    tableEl.append(thead)
+    tableEl.append('<tbody></tbody>')
+
+    let table = tableEl.DataTable({
+        destroy: true,
+        responsive: false,
+        scrollX: false,
+        scrollCollapse: false,
+        autoWidth: true,
+        pageLength: 10,
+        data: rows,
+        columns: columns,
+        columnDefs: referenceIndex >= 0 ? [{
+            targets: referenceIndex,
+            width: "260px",
+            className: "linelist-reference"
+        }] : []
+    });
+    LinelistTable = table
+    // Ensure header/body alignment after render and on layout changes
+    setTimeout(() => { adjust_linelist_table(table); }, 0);
+    setTimeout(() => { adjust_linelist_table(table); }, 200);
+    setTimeout(() => { adjust_linelist_table(table); }, 500);
+    $(window).off("resize.linelist").on("resize.linelist", () => {
+        if (LinelistTable) adjust_linelist_table(LinelistTable);
     });
 }
 
