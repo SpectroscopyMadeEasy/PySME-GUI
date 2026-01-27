@@ -186,6 +186,34 @@ $theme-colors: (
     margin-top: 0.5rem;
 }
 
+#linelist-controls-top .dataTables_length,
+#linelist-controls-top .dataTables_filter,
+#linelist-controls-bottom .dataTables_info,
+#linelist-controls-bottom .dataTables_paginate {
+    margin: 0;
+}
+
+#linelist-controls-top label,
+#linelist-controls-bottom label {
+    margin: 0;
+}
+
+#linelist-controls-top .dataTables_length label,
+#linelist-controls-top .dataTables_filter label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+#linelist-controls-top .dataTables_length select {
+    margin: 0;
+}
+
+#linelist-controls-top .dataTables_filter input {
+    margin: 0;
+}
+
 
 .linelist-reference {
     width: 260px;

@@ -130,6 +130,8 @@ function move_linelist_controls(table: any) {
     let top = $('#linelist-controls-top')
     let bottom = $('#linelist-controls-bottom')
     if (top.length === 0 || bottom.length === 0) return
+    top.empty()
+    bottom.empty()
     top.append(wrapper.find('.dataTables_length'))
     top.append(wrapper.find('.dataTables_filter'))
     bottom.append(wrapper.find('.dataTables_info'))
