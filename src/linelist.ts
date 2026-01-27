@@ -114,6 +114,7 @@ function show_linelist(sme: SmeFile) {
         }] : []
     });
     LinelistTable = table
+    move_linelist_controls(table)
     // Ensure header/body alignment after render and on layout changes
     setTimeout(() => { adjust_linelist_table(table); }, 0);
     setTimeout(() => { adjust_linelist_table(table); }, 200);
@@ -121,6 +122,18 @@ function show_linelist(sme: SmeFile) {
     $(window).off("resize.linelist").on("resize.linelist", () => {
         if (LinelistTable) adjust_linelist_table(LinelistTable);
     });
+}
+
+function move_linelist_controls(table: any) {
+    let wrapper = $(table.table().container())
+    if (wrapper.length === 0) return
+    let top = $('#linelist-controls-top')
+    let bottom = $('#linelist-controls-bottom')
+    if (top.length === 0 || bottom.length === 0) return
+    top.append(wrapper.find('.dataTables_length'))
+    top.append(wrapper.find('.dataTables_filter'))
+    bottom.append(wrapper.find('.dataTables_info'))
+    bottom.append(wrapper.find('.dataTables_paginate'))
 }
 
 function adjust_linelist_table(table: any) {

@@ -162,7 +162,7 @@ $theme-colors: (
     right: 0.5rem;
 }
 
-#div-linelist {
+.linelist-scroll {
     overflow-x: auto;
 }
 
@@ -170,6 +170,22 @@ $theme-colors: (
     width: max-content;
     min-width: 100%;
 }
+
+#linelist-controls-top,
+#linelist-controls-bottom {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+#linelist-controls-top {
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+#linelist-controls-bottom {
+    justify-content: space-between;
+    margin-top: 0.5rem;
+}
+
 
 .linelist-reference {
     width: 260px;
