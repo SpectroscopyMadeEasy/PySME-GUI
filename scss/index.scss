@@ -34,6 +34,43 @@ $theme-colors: (
 @import "error.scss";
 @import "footer.scss";
 
+:root {
+    color-scheme: light;
+    --app-bg: #f8f9fc;
+    --app-surface: #f3f6fb;
+    --app-surface-strong: #ffffff;
+    --app-topbar-bg: #ffffff;
+    --app-card-bg: #ffffff;
+    --app-border: #e1e6ef;
+    --app-text: #1f2937;
+    --app-text-muted: #6b7280;
+    --app-input-bg: #ffffff;
+    --app-input-text: #1f2937;
+    --app-input-border: #d6dbe6;
+    --app-sidebar-bg: #4e73df;
+    --app-sidebar-text: #f8fafc;
+    --app-chip-bg: #eef2f7;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --app-bg: #0b1220;
+    --app-surface: #0f172a;
+    --app-surface-strong: #111827;
+    --app-topbar-bg: #0f172a;
+    --app-card-bg: #111827;
+    --app-border: #1f2937;
+    --app-text: #e5e7eb;
+    --app-text-muted: #9ca3af;
+    --app-input-bg: #0b1220;
+    --app-input-text: #e5e7eb;
+    --app-input-border: #273449;
+    --app-sidebar-bg: #1e293b;
+    --app-sidebar-text: #e5e7eb;
+    --app-chip-bg: #1f2937;
+    --app-header-bg: #0b1220;
+}
+
 .text-black{
     color: $black !important;
 }
@@ -120,11 +157,35 @@ $theme-colors: (
     top: 0;
     right: 0;
     left: $sidebar-base-width;
-    z-index: 1030;
+    z-index: 1010;
+    overflow: visible;
+}
+#content .topbar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -$sidebar-base-width;
+    width: $sidebar-base-width;
+    background-color: var(--app-topbar-bg);
+    border-bottom: 1px solid var(--app-border);
+}
+ #content .topbar::after {
+    content: "";
+    position: absolute;
+    left: -$sidebar-base-width;
+    right: 0;
+    bottom: -1px;
+    height: 1px;
+    background-color: var(--app-border);
 }
 @media (max-width: 768px) {
     #content .topbar {
         left: 0;
+    }
+    #content .topbar::before {
+        left: 0;
+        width: 0;
     }
 }
 #content {
@@ -237,6 +298,7 @@ $theme-colors: (
 // Topbar action icons: center align with sidebar brand icon and slightly larger
 #content .topbar .navbar-nav.mr-auto {
     align-items: center;
+    margin-left: -1.05rem;
 }
 #content .topbar .navbar-nav.mr-auto .nav-link {
     display: flex;
@@ -246,6 +308,7 @@ $theme-colors: (
     padding: 0;
     height: $topbar-base-height;
     transform: translateY(3px);
+    min-width: 90px;
 }
 #content .topbar .navbar-nav.mr-auto .nav-link i {
     font-size: 1.35rem;
@@ -366,8 +429,8 @@ $theme-colors: (
     font-size: 0.7rem;
     padding: 0.15rem 0.4rem;
     border-radius: 0.5rem;
-    background: $gray-200;
-    color: $gray-700;
+    background: var(--app-chip-bg);
+    color: var(--app-text-muted);
     white-space: nowrap;
 }
 .spectrum-delete {
@@ -375,26 +438,132 @@ $theme-colors: (
 }
 
 #wrapper #content-wrapper {
-    background-color: $white;
+    background-color: var(--app-bg);
 }
 #content-wrapper {
-    background-color: $white !important;
+    background-color: var(--app-bg) !important;
 }
 #page-top,
 body,
 #wrapper {
-    background-color: $white;
+    background-color: var(--app-bg);
+    color: var(--app-text);
 }
 #content {
-    background-color: $white;
+    background-color: var(--app-bg);
 }
 #content .topbar {
-    background-color: $white;
-    border-bottom: 0;
+    background-color: var(--app-topbar-bg);
+    border-bottom: 1px solid transparent;
     margin-bottom: 0;
 }
+#content .topbar,
+#content .topbar::before {
+    background-color: var(--app-topbar-bg);
+}
+#content .topbar {
+    box-shadow: 0 1px 0 var(--app-border);
+}
+#wrapper #content-wrapper,
+#content-wrapper,
+#page-top,
+body,
+#wrapper {
+    background-color: var(--app-bg);
+}
+.sticky-footer {
+    background-color: var(--app-topbar-bg);
+    border-top: 1px solid var(--app-border);
+    color: var(--app-text-muted);
+}
+#content .topbar .nav-link,
+#content .topbar .nav-link span,
+#content .topbar .nav-link i {
+    color: var(--app-text);
+}
 #content .container-fluid {
-    background-color: $gray-100;
+    background-color: var(--app-surface);
     padding-top: 1rem;
     padding-bottom: 1.5rem;
+}
+
+.card {
+    background-color: var(--app-card-bg);
+    border-color: var(--app-border);
+}
+.card-header {
+    background-color: var(--app-card-bg);
+    border-color: var(--app-border);
+    color: var(--app-text);
+}
+.table {
+    color: var(--app-text);
+}
+.table th,
+.table td {
+    border-color: var(--app-border);
+}
+.dropdown-menu {
+    background-color: var(--app-card-bg);
+    border-color: var(--app-border);
+    color: var(--app-text);
+}
+.dropdown-item {
+    color: var(--app-text);
+}
+.dropdown-item:hover,
+.dropdown-item:focus {
+    background-color: var(--app-surface);
+    color: var(--app-text);
+}
+.form-control,
+.custom-select {
+    background-color: var(--app-input-bg);
+    color: var(--app-input-text);
+    border-color: var(--app-input-border);
+}
+.form-control::placeholder {
+    color: var(--app-text-muted);
+}
+.spectrum-mask-controls {
+    background: var(--app-card-bg);
+}
+.sidebar.bg-gradient-primary {
+    background-color: var(--app-sidebar-bg);
+    background-image: none;
+}
+.sidebar {
+    position: relative;
+    z-index: 1020;
+}
+#content .topbar {
+    background-clip: padding-box;
+}
+.sidebar .nav-item .nav-link,
+.sidebar .nav-item .nav-link span,
+.sidebar .nav-item .nav-link i {
+    color: var(--app-sidebar-text);
+}
+.sidebar .sidebar-brand,
+.sidebar .sidebar-brand .sidebar-brand-text {
+    color: var(--app-sidebar-text);
+}
+.theme-toggle {
+    cursor: pointer;
+    min-width: 90px;
+    height: $topbar-base-height;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transform: translateY(8px);
+}
+.theme-toggle i {
+    font-size: 1.35rem;
+    line-height: 1;
+    margin-bottom: 0.15rem;
+}
+.theme-toggle span {
+    font-size: 0.7rem;
 }

@@ -71,6 +71,97 @@ $(document).on('click', 'a.scroll-to-top', function (e: any) {
 });
 $("#sidebarToggle").click()
 
+type ThemeMode = "system" | "light" | "dark"
+const THEME_KEY = "pysme-theme"
+const themeMedia = window.matchMedia("(prefers-color-scheme: dark)")
+
+function get_system_theme(): "light" | "dark" {
+    return themeMedia.matches ? "dark" : "light"
+}
+
+function update_theme_ui(mode: ThemeMode) {
+    const themeLabel = document.getElementById("theme-toggle-label")
+    const themeToggle = document.getElementById("btn-theme-toggle")
+    const themeIcon = themeToggle ? themeToggle.querySelector("i") : null
+    if (!themeLabel || !themeIcon) return
+    if (mode === "system") {
+        themeLabel.textContent = "Auto"
+        themeIcon.className = "fas fa-adjust"
+    } else if (mode === "dark") {
+        themeLabel.textContent = "Dark"
+        themeIcon.className = "fas fa-moon"
+    } else {
+        themeLabel.textContent = "Light"
+        themeIcon.className = "fas fa-sun"
+    }
+}
+
+function apply_theme(mode: ThemeMode) {
+    const actual = mode === "system" ? get_system_theme() : mode
+    document.documentElement.setAttribute("data-theme", actual)
+    document.body?.setAttribute("data-theme", actual)
+    document.documentElement.style.setProperty("color-scheme", actual)
+    if (document.body) {
+        document.body.style.setProperty("color-scheme", actual)
+    }
+    update_theme_ui(mode)
+}
+
+function get_saved_theme(): ThemeMode {
+    const saved_raw = localStorage.getItem(THEME_KEY) as ThemeMode | null
+    if (!saved_raw) return "system"
+    if (saved_raw === "light" || saved_raw === "dark" || saved_raw === "system") return saved_raw
+    return "system"
+}
+
+function set_theme(mode: ThemeMode) {
+    localStorage.setItem(THEME_KEY, mode)
+    apply_theme(mode)
+}
+
+function cycle_theme_mode(mode: ThemeMode): ThemeMode {
+    if (mode === "system") return "light"
+    if (mode === "light") return "dark"
+    return "system"
+}
+
+let current_theme_mode: ThemeMode = get_saved_theme()
+if (current_theme_mode === "dark" && !localStorage.getItem(`${THEME_KEY}-migrated`)) {
+    current_theme_mode = "system"
+    localStorage.setItem(`${THEME_KEY}-migrated`, "1")
+    localStorage.setItem(THEME_KEY, current_theme_mode)
+}
+apply_theme(current_theme_mode)
+
+if (typeof themeMedia.addEventListener === "function") {
+    themeMedia.addEventListener("change", () => {
+        if (current_theme_mode === "system") {
+            apply_theme(current_theme_mode)
+        }
+    })
+} else if (typeof (themeMedia as any).addListener === "function") {
+    ;(themeMedia as any).addListener(() => {
+        if (current_theme_mode === "system") {
+            apply_theme(current_theme_mode)
+        }
+    })
+}
+
+function init_theme_toggle() {
+    const themeToggle = document.getElementById("btn-theme-toggle")
+    if (!themeToggle) return
+    themeToggle.addEventListener("click", () => {
+        current_theme_mode = cycle_theme_mode(current_theme_mode)
+        set_theme(current_theme_mode)
+    })
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init_theme_toggle)
+} else {
+    init_theme_toggle()
+}
+
 
 tmp.setGracefulCleanup();
 
