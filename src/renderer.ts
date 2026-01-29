@@ -105,6 +105,7 @@ function apply_theme(mode: ThemeMode) {
         document.body.style.setProperty("color-scheme", actual)
     }
     update_theme_ui(mode)
+    window.dispatchEvent(new CustomEvent("pysme_theme_changed", { detail: { mode, actual } }))
 }
 
 function get_saved_theme(): ThemeMode {
@@ -161,6 +162,20 @@ if (document.readyState === "loading") {
 } else {
     init_theme_toggle()
 }
+
+function disable_number_input_wheel() {
+    document.addEventListener("wheel", (event: WheelEvent) => {
+        const target = event.target as HTMLElement | null
+        if (!target) return
+        if (target instanceof HTMLInputElement && target.type === "number") {
+            const delta = event.deltaY
+            event.preventDefault()
+            window.scrollBy({ top: delta, left: 0, behavior: "auto" })
+        }
+    }, { passive: false })
+}
+
+disable_number_input_wheel()
 
 
 tmp.setGracefulCleanup();

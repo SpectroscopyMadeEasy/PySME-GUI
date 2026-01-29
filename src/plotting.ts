@@ -37,6 +37,35 @@ var data_index: { [id: string]: { [id: number]: number } } = {
 var show_annotations = true;
 var last_view_ranges: { x?: [number, number]; y?: [number, number] } = {}
 
+function get_plot_theme() {
+    const is_dark = document.documentElement.getAttribute("data-theme") === "dark"
+    return {
+        axis_color: is_dark ? "#cbd5f5" : "#444",
+        grid_color: is_dark ? "#1f2937" : "#e9ecef",
+        plot_bg: is_dark ? "#0b1220" : "#ffffff",
+        paper_bg: is_dark ? "#0f172a" : "#ffffff",
+        line_marker: is_dark ? "#697fa3" : "#6b7280",
+        line_label: is_dark ? "#cbd5f5" : "#111111",
+    }
+}
+
+function apply_plot_theme() {
+    if (!graphDiv || !graphDiv.layout) return
+    const theme = get_plot_theme()
+    Plotly.relayout(graphDiv, {
+        plot_bgcolor: theme.plot_bg,
+        paper_bgcolor: theme.paper_bg,
+        "xaxis.color": theme.axis_color,
+        "xaxis.gridcolor": theme.grid_color,
+        "xaxis.zerolinecolor": theme.grid_color,
+        "yaxis.color": theme.axis_color,
+        "yaxis.gridcolor": theme.grid_color,
+        "yaxis.zerolinecolor": theme.grid_color,
+        "legend.font.color": theme.axis_color,
+        "font.color": theme.axis_color,
+    })
+}
+
 function get_vector_segments(vec: any): FloatArray[] {
     if (!vec) return []
     if (ArrayBuffer.isView(vec)) return [vec as FloatArray]
@@ -81,6 +110,15 @@ addEventListener("pysme_load", (event: any) => {
     if (!updated.length || updated.includes("spectrum") || updated.includes("linelist")) {
         plot_sme(sme)
     }
+})
+
+addEventListener("pysme_theme_changed", () => {
+    if (current_plot_sme) {
+        plot_sme(current_plot_sme)
+    } else {
+        clear_plot()
+    }
+    apply_plot_theme()
 })
 
 function reset_plot() {
@@ -265,6 +303,7 @@ function plot_sme(sme: any) {
     var counter = 0;
 
 
+    const theme = get_plot_theme()
     for (let seg = 0; seg < nSegment; seg++) {
         var k = visible.length
         line_mask_idx[seg] = k
@@ -517,14 +556,16 @@ function plot_sme(sme: any) {
                     text: labels[key],
                     hovertext: wlcent[key],
                     textangle: 90,
-                    opacity: 1,
+                    opacity: 0.75,
                     ax: 0,
                     ay: ay,
                     ayref: "y",
                     showarrow: true,
                     arrowhead: 7,
+                    arrowwidth: 1,
+                    arrowcolor: theme.line_marker,
                     xanchor: "left",
-                    font: { size: fmt["fontsize"] }
+                    font: { size: fmt["fontsize"], color: theme.line_label }
                 })
             }
             annotations[seg] = seg_annotations
@@ -561,14 +602,16 @@ function plot_sme(sme: any) {
     }
 
     const base_layout: any = {
-        xaxis: { title: "Wavelength [Å]" },
-        yaxis: { title: "Intensity" },
+        xaxis: { title: "Wavelength [Å]", color: theme.axis_color, gridcolor: theme.grid_color, zerolinecolor: theme.grid_color },
+        yaxis: { title: "Intensity", color: theme.axis_color, gridcolor: theme.grid_color, zerolinecolor: theme.grid_color },
         showlegend: true,
         legend: { traceorder: "reversed" },
-        font: { family: "Open Sans, sans-serif", size: fmt["fontsize"] },
+        font: { family: "Open Sans, sans-serif", size: fmt["fontsize"], color: theme.axis_color },
         selectdirection: "h",
         sliders: [slider],
-        annotations: annotations[0]
+        annotations: annotations[0],
+        plot_bgcolor: theme.plot_bg,
+        paper_bgcolor: theme.paper_bg,
     }
     if (last_view_ranges.x) {
         base_layout.xaxis = { ...base_layout.xaxis, range: last_view_ranges.x }

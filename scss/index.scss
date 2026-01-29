@@ -47,6 +47,7 @@ $theme-colors: (
     --app-input-bg: #ffffff;
     --app-input-text: #1f2937;
     --app-input-border: #d6dbe6;
+    --app-input-focus: #6b8cff;
     --app-sidebar-bg: #4e73df;
     --app-sidebar-text: #f8fafc;
     --app-chip-bg: #eef2f7;
@@ -65,6 +66,7 @@ $theme-colors: (
     --app-input-bg: #0b1220;
     --app-input-text: #e5e7eb;
     --app-input-border: #273449;
+    --app-input-focus: #5b7cfe;
     --app-sidebar-bg: #1e293b;
     --app-sidebar-text: #e5e7eb;
     --app-chip-bg: #1f2937;
@@ -94,8 +96,63 @@ $theme-colors: (
     }
 }
 
+// Dark mode log rows
+@each $color, $value in $theme-colors {
+    html[data-theme="dark"] #table-log tbody tr.log-#{$color} > td,
+    body[data-theme="dark"] #table-log tbody tr.log-#{$color} > td {
+        background-color: rgba(red($value), green($value), blue($value), 0.12) !important;
+        color: #e5e7eb !important;
+        transition: background-color 120ms ease-in-out;
+    }
+    html[data-theme="dark"] #table-log.table-hover tbody tr.log-#{$color}:hover > td,
+    body[data-theme="dark"] #table-log.table-hover tbody tr.log-#{$color}:hover > td {
+        background-color: rgba(red($value), green($value), blue($value), 0.22) !important;
+    }
+}
+
+// Force highest-specificity dark hover overrides
+@each $color, $value in $theme-colors {
+    html[data-theme="dark"] body #table-log.table-hover tbody tr.log-#{$color}:hover > td,
+    body[data-theme="dark"] body #table-log.table-hover tbody tr.log-#{$color}:hover > td,
+    html[data-theme="dark"] body tr.log-#{$color}:hover > td,
+    body[data-theme="dark"] body tr.log-#{$color}:hover > td {
+        background-color: rgba(red($value), green($value), blue($value), 0.22) !important;
+    }
+}
+
+// Fallback for log table when ids/classes differ
+@each $color, $value in $theme-colors {
+    html[data-theme="dark"] tr.log-#{$color} > td,
+    body[data-theme="dark"] tr.log-#{$color} > td {
+        background-color: rgba(red($value), green($value), blue($value), 0.12) !important;
+        color: #e5e7eb !important;
+    }
+    html[data-theme="dark"] tr.log-#{$color}:hover > td,
+    body[data-theme="dark"] tr.log-#{$color}:hover > td {
+        background-color: rgba(red($value), green($value), blue($value), 0.22) !important;
+    }
+}
+
+// Override bootstrap hover background on row itself
+@each $color, $value in $theme-colors {
+    html[data-theme="dark"] #table-log tbody tr.log-#{$color},
+    body[data-theme="dark"] #table-log tbody tr.log-#{$color} {
+        background-color: rgba(red($value), green($value), blue($value), 0.12) !important;
+    }
+    html[data-theme="dark"] #table-log.table-hover tbody tr.log-#{$color}:hover,
+    body[data-theme="dark"] #table-log.table-hover tbody tr.log-#{$color}:hover {
+        background-color: rgba(red($value), green($value), blue($value), 0.22) !important;
+    }
+}
+
 .log-message {
     max-width: 0;
+}
+
+// Log message text color in dark mode
+html[data-theme="dark"] .log-message-text,
+body[data-theme="dark"] .log-message-text {
+    color: #e5e7eb;
 }
 
 .log-timestamp {
@@ -522,8 +579,168 @@ body,
     color: var(--app-input-text);
     border-color: var(--app-input-border);
 }
+.form-control:focus,
+.custom-select:focus {
+    background-color: var(--app-input-bg);
+    color: var(--app-input-text);
+    border-color: var(--app-input-focus);
+    box-shadow: 0 0 0 0.2rem rgba(91, 124, 254, 0.25);
+}
+.input-group-text {
+    background-color: var(--app-input-bg);
+    color: var(--app-text);
+    border-color: var(--app-input-border);
+}
 .form-control::placeholder {
     color: var(--app-text-muted);
+}
+
+// Dark-mode DataTables pagination + scrollbar
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button {
+    color: var(--app-text) !important;
+    border-color: var(--app-border) !important;
+    background: var(--app-card-bg) !important;
+}
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button:hover,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+    background: var(--app-surface) !important;
+    border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+    background: #243a75 !important;
+    border-color: #2b4aa2 !important;
+    color: #e7ecff !important;
+}
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled,
+html[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled:hover,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled,
+body[data-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled:hover {
+    background: transparent !important;
+    color: var(--app-text-muted) !important;
+    border-color: transparent !important;
+}
+html[data-theme="dark"] .dataTables_wrapper .pagination .page-link,
+body[data-theme="dark"] .dataTables_wrapper .pagination .page-link {
+    background-color: var(--app-card-bg);
+    color: var(--app-text);
+    border-color: var(--app-border);
+}
+html[data-theme="dark"] .dataTables_wrapper .pagination .page-link:hover,
+body[data-theme="dark"] .dataTables_wrapper .pagination .page-link:hover {
+    background-color: var(--app-surface);
+    color: var(--app-text);
+    border-color: var(--app-border);
+}
+html[data-theme="dark"] .dataTables_wrapper .pagination .page-item.active .page-link,
+body[data-theme="dark"] .dataTables_wrapper .pagination .page-item.active .page-link {
+    background-color: #243a75;
+    border-color: #2b4aa2;
+    color: #e7ecff;
+}
+html[data-theme="dark"] .dataTables_wrapper .pagination .page-item.disabled .page-link,
+body[data-theme="dark"] .dataTables_wrapper .pagination .page-item.disabled .page-link {
+    background-color: transparent;
+    color: var(--app-text-muted);
+    border-color: var(--app-border);
+}
+
+// Fallback: force Bootstrap pagination dark styles
+html[data-theme="dark"] .pagination .page-link,
+body[data-theme="dark"] .pagination .page-link {
+    background-color: var(--app-card-bg) !important;
+    color: var(--app-text) !important;
+    border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .pagination .page-link:hover,
+body[data-theme="dark"] .pagination .page-link:hover {
+    background-color: var(--app-surface) !important;
+    color: var(--app-text) !important;
+    border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .pagination .page-item.active .page-link,
+body[data-theme="dark"] .pagination .page-item.active .page-link {
+    background-color: #243a75 !important;
+    border-color: #2b4aa2 !important;
+    color: #e7ecff !important;
+}
+html[data-theme="dark"] .pagination .page-item.disabled .page-link,
+body[data-theme="dark"] .pagination .page-item.disabled .page-link {
+    background-color: transparent !important;
+    color: var(--app-text-muted) !important;
+    border-color: var(--app-border) !important;
+}
+
+// Extra-strong overrides for DataTables pagination markup
+html[data-theme="dark"] .paginate_button,
+body[data-theme="dark"] .paginate_button,
+html[data-theme="dark"] .dataTables_paginate a,
+body[data-theme="dark"] .dataTables_paginate a {
+    background-color: var(--app-card-bg) !important;
+    color: var(--app-text) !important;
+    border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .paginate_button:hover,
+body[data-theme="dark"] .paginate_button:hover,
+html[data-theme="dark"] .dataTables_paginate a:hover,
+body[data-theme="dark"] .dataTables_paginate a:hover {
+    background-color: var(--app-surface) !important;
+    color: var(--app-text) !important;
+    border-color: var(--app-border) !important;
+}
+html[data-theme="dark"] .paginate_button.current,
+body[data-theme="dark"] .paginate_button.current,
+html[data-theme="dark"] .paginate_button.current:hover,
+body[data-theme="dark"] .paginate_button.current:hover,
+html[data-theme="dark"] .dataTables_paginate .active a,
+body[data-theme="dark"] .dataTables_paginate .active a {
+    background-color: #243a75 !important;
+    border-color: #2b4aa2 !important;
+    color: #e7ecff !important;
+}
+html[data-theme="dark"] .paginate_button.disabled,
+body[data-theme="dark"] .paginate_button.disabled,
+html[data-theme="dark"] .paginate_button.disabled:hover,
+body[data-theme="dark"] .paginate_button.disabled:hover {
+    background-color: transparent !important;
+    color: var(--app-text-muted) !important;
+    border-color: var(--app-border) !important;
+}
+[data-theme="dark"] #linelist-controls-bottom,
+[data-theme="dark"] #linelist-controls-top {
+    color: var(--app-text);
+}
+
+[data-theme="dark"] .linelist-scroll::-webkit-scrollbar,
+[data-theme="dark"] .dataTables_scrollBody::-webkit-scrollbar {
+    height: 12px;
+    background: #0b1220;
+}
+[data-theme="dark"] .linelist-scroll::-webkit-scrollbar-track,
+[data-theme="dark"] .dataTables_scrollBody::-webkit-scrollbar-track {
+    background: #0b1220;
+}
+[data-theme="dark"] .linelist-scroll::-webkit-scrollbar-thumb,
+[data-theme="dark"] .dataTables_scrollBody::-webkit-scrollbar-thumb {
+    background-color: #2b3750;
+    border-radius: 8px;
+    border: 2px solid #0b1220;
+}
+[data-theme="dark"] .linelist-scroll::-webkit-scrollbar-thumb:hover,
+[data-theme="dark"] .dataTables_scrollBody::-webkit-scrollbar-thumb:hover {
+    background-color: #3a4a6b;
+}
+.form-control[type="number"]::-webkit-outer-spin-button,
+.form-control[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.form-control[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
 }
 .spectrum-mask-controls {
     background: var(--app-card-bg);
