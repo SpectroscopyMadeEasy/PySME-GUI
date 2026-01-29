@@ -70,10 +70,10 @@ function show_linelist(sme: SmeFile) {
         Object.keys(row).forEach((k) => keySet.add(k))
     })
     let keys = Array.from(keySet)
-    columns = keys.map((key) => {
+    columns = keys.map((key, index) => {
         let column: any = { title: key, data: key }
         if (key === "reference") {
-            referenceIndex = columns.length
+            referenceIndex = index
             column.className = "linelist-reference"
             column.render = function (data: any, type: string) {
                 if (data === null || data === undefined) return ""
@@ -95,7 +95,7 @@ function show_linelist(sme: SmeFile) {
             }
         }
         if (key === "wlcent") {
-            wlcentIndex = columns.length
+            wlcentIndex = index
             column.type = "num"
         }
         return column

@@ -284,14 +284,15 @@ body[data-theme="dark"] .log-message-text {
     position: fixed;
     top: 0.75rem;
     right: 1rem;
-    z-index: 1040;
-    background: $white;
-    border: 1px solid $gray-300;
+    z-index: 1100;
+    background: var(--app-card-bg);
+    border: 1px solid var(--app-border);
     border-left: 4px solid $blue;
     border-radius: 0.35rem;
     padding: 0.5rem 0.75rem 0.5rem 0.75rem;
     min-width: 220px;
-    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.08);
+    color: var(--app-text);
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.2);
 }
 .synthesis-status.synthesis-status-success {
     background: lighten($green, 45%);
@@ -303,12 +304,32 @@ body[data-theme="dark"] .log-message-text {
 }
 .synthesis-status-message {
     font-size: 0.9rem;
-    color: $gray-700;
+    color: var(--app-text-muted);
 }
 .synthesis-status .close {
     position: absolute;
     top: 0.35rem;
     right: 0.5rem;
+    color: var(--app-text);
+}
+
+// Dark-mode synthesis status styling
+html[data-theme="dark"] .synthesis-status,
+body[data-theme="dark"] .synthesis-status {
+    background: #0f172a;
+    border-color: #1f2937;
+    border-left-color: #3b82f6;
+    color: #e5e7eb;
+    box-shadow: 0 0.5rem 1.25rem rgba(0, 0, 0, 0.35);
+}
+html[data-theme="dark"] .synthesis-status.synthesis-status-success,
+body[data-theme="dark"] .synthesis-status.synthesis-status-success {
+    background: #0f3a2f;
+    border-left-color: #10b981;
+}
+html[data-theme="dark"] .synthesis-status-message,
+body[data-theme="dark"] .synthesis-status-message {
+    color: #cbd5f5;
 }
 
 .linelist-scroll {
@@ -318,6 +339,7 @@ body[data-theme="dark"] .log-message-text {
 #table-linelist {
     width: max-content;
     min-width: 100%;
+    border: 1px solid var(--app-border);
 }
 
 #linelist-controls-top,
@@ -590,6 +612,20 @@ body,
 .table th,
 .table td {
     border-color: var(--app-border);
+}
+
+// Keep linelist hover text readable in dark mode
+html[data-theme="dark"] #table-linelist.table-hover tbody tr:hover > td,
+body[data-theme="dark"] #table-linelist.table-hover tbody tr:hover > td {
+    color: var(--app-text) !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+// Keep linelist hover text readable in light mode
+html[data-theme="light"] #table-linelist.table-hover tbody tr:hover > td,
+body[data-theme="light"] #table-linelist.table-hover tbody tr:hover > td,
+#table-linelist.table-hover tbody tr:hover > td {
+    color: var(--app-text) !important;
 }
 .dropdown-menu {
     background-color: var(--app-card-bg);
