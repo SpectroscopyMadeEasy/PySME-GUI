@@ -9,6 +9,9 @@ var fmt = {
     fontsize: 16,
 }
 
+// Avoid TS errors when ResizeObserver lib isn't available in the TS config.
+declare var ResizeObserver: any;
+
 function hex_to_rgba(hex: string, alpha: number) {
     let value = hex.replace("#", "")
     if (value.length === 3) {
@@ -36,6 +39,7 @@ var data_index: { [id: string]: { [id: number]: number } } = {
 // Not showing annotations is a lot faster
 var show_annotations = true;
 var last_view_ranges: { x?: [number, number]; y?: [number, number] } = {}
+var resize_observer: any = null
 
 function get_plot_theme() {
     const is_dark = document.documentElement.getAttribute("data-theme") === "dark"
@@ -136,12 +140,38 @@ function reset_plot() {
 function clear_plot() {
     reset_plot()
     if (graphDiv) {
+        init_plot_resize()
+        const theme = get_plot_theme()
         Plotly.react(graphDiv, [], {
-            xaxis: { title: "Wavelength [Å]" },
-            yaxis: { title: "Intensity" },
+            xaxis: { title: "Wavelength [Å]", color: theme.axis_color, gridcolor: theme.grid_color, zerolinecolor: theme.grid_color },
+            yaxis: { title: "Intensity", color: theme.axis_color, gridcolor: theme.grid_color, zerolinecolor: theme.grid_color },
             showlegend: false,
+            font: { family: "Open Sans, sans-serif", size: fmt["fontsize"], color: theme.axis_color },
+            plot_bgcolor: theme.plot_bg,
+            paper_bgcolor: theme.paper_bg,
         })
     }
+}
+
+function schedule_plot_resize() {
+    if (!graphDiv) return
+    try {
+        Plotly.Plots.resize(graphDiv)
+    } catch (err) {
+        console.warn("Plot resize failed", err)
+    }
+}
+
+function init_plot_resize() {
+    if (!graphDiv) return
+    if (resize_observer) return
+    if (typeof ResizeObserver !== "undefined") {
+        resize_observer = new ResizeObserver(() => {
+            schedule_plot_resize()
+        })
+        resize_observer.observe(graphDiv)
+    }
+    window.addEventListener("resize", schedule_plot_resize)
 }
 
 function get_mask_value() {
@@ -265,6 +295,7 @@ function create_mask_points(x: FloatArray, y: FloatArray, mask: IntArray, value:
 }
 
 function plot_sme(sme: any) {
+    init_plot_resize()
     let store: SpectrumStoreState | null = (window as any).spectrum_store || null
     let active_entry: SpectrumEntry | null = null
     if (store && store.spectra.length > 0) {
