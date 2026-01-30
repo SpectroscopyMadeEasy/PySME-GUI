@@ -632,10 +632,12 @@ body,
     align-items: center;
     gap: 0.5rem;
     justify-content: space-between;
+    flex-wrap: nowrap;
 }
 
 .abundance-header-actions .abundance-solar-select {
     width: auto;
+    flex: 0 0 auto;
 }
 
 .abundance-header-actions .dropdown {
@@ -645,6 +647,11 @@ body,
 .abundance-header-actions .abundance-solar-select .custom-select {
     width: auto;
     min-width: 0;
+    flex: 0 0 auto;
+}
+
+.abundance-header-actions .abundance-solar-select .input-group-text {
+    white-space: nowrap;
 }
 .table {
     color: var(--app-text);
@@ -656,7 +663,7 @@ body,
 
 // Abundance table outer border in dark mode: soften the outline
 html[data-theme="dark"] #table-abundance {
-    border-color: #2a364d;
+    border-color: #1e2a3c;
 }
 
 // Keep linelist hover text readable in dark mode

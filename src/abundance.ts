@@ -1,4 +1,6 @@
 
+const path = require("path")
+
 addEventListener("pysme_load", (event: any) => {
     let sme: SmeFile = event.detail.structure
     let updated: string[] = event.detail.updated
@@ -20,12 +22,116 @@ async function apply_abundance_model(model: string) {
 }
 
 const SelectAbundSolar = document.getElementById("select-abund-solar") as HTMLSelectElement | null
+const RefreshAbundSolar = document.getElementById("btn-abund-refresh")
+
+function get_abundance_cache_path(): string | null {
+    try {
+        const electron = require("electron")
+        const app = electron?.remote?.app
+        if (app && typeof app.getPath === "function") {
+            return path.join(app.getPath("userData"), "abundance_models.json")
+        }
+    } catch (err) {
+        console.warn("Could not resolve userData cache path for abundance models", err)
+    }
+    return null
+}
+
+function format_abundance_label(model: string): string {
+    if (!model) return model
+    return model.charAt(0).toUpperCase() + model.slice(1)
+}
+
+function populate_abundance_select(models: string[], preferValue?: string) {
+    if (!SelectAbundSolar) return
+    const previous = preferValue || SelectAbundSolar.value
+    SelectAbundSolar.innerHTML = ""
+    for (const model of models) {
+        const option = document.createElement("option")
+        option.value = model
+        option.textContent = format_abundance_label(model)
+        SelectAbundSolar.appendChild(option)
+    }
+    if (previous && models.includes(previous)) {
+        SelectAbundSolar.value = previous
+    } else if (models.includes("asplund2009")) {
+        SelectAbundSolar.value = "asplund2009"
+    } else if (models.length) {
+        SelectAbundSolar.value = models[0]
+    }
+}
+
+async function fetch_abundance_models(): Promise<string[] | null> {
+    let tmpout = tmp.fileSync({ postfix: ".json" })
+    let success = await call_python("list_abundance_models.py", [tmpout.name])
+    if (!success) return null
+    try {
+        const raw = fs.readFileSync(tmpout.name, { encoding: "utf8" })
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed?.models)) {
+            return parsed.models.map((m: string) => m.toLowerCase())
+        }
+        if (Array.isArray(parsed)) {
+            return parsed.map((m: string) => String(m).toLowerCase())
+        }
+    } catch (err) {
+        console.warn("Failed to parse abundance models list", err)
+    }
+    return null
+}
+
+function read_abundance_cache(): string[] | null {
+    const cache_path = get_abundance_cache_path()
+    if (!cache_path || !fs.existsSync(cache_path)) return null
+    try {
+        const raw = fs.readFileSync(cache_path, { encoding: "utf8" })
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed?.models)) {
+            return parsed.models.map((m: string) => m.toLowerCase())
+        }
+    } catch (err) {
+        console.warn("Failed to read abundance model cache", err)
+    }
+    return null
+}
+
+function write_abundance_cache(models: string[]) {
+    const cache_path = get_abundance_cache_path()
+    if (!cache_path) return
+    try {
+        fs.writeFileSync(cache_path, JSON.stringify({ models, updatedAt: new Date().toISOString() }, null, 2))
+    } catch (err) {
+        console.warn("Failed to write abundance model cache", err)
+    }
+}
+
+async function load_abundance_models(force_refresh = false): Promise<string[]> {
+    let models: string[] | null = null
+    if (!force_refresh) {
+        models = read_abundance_cache()
+    }
+    if (!models || !models.length) {
+        models = await fetch_abundance_models()
+    }
+    if (!models || !models.length) {
+        models = ["asplund2009", "grevesse2007", "lodders2003", "empty"]
+    }
+    models = models.map((m) => m.toLowerCase()).filter((m) => m !== "solar")
+    write_abundance_cache(models)
+    populate_abundance_select(models)
+    return models
+}
 if (SelectAbundSolar) {
     SelectAbundSolar.addEventListener("change", async () => {
         let model = SelectAbundSolar.value
         if (!model) return
         await apply_abundance_model(model)
     })
+    if (RefreshAbundSolar) {
+        RefreshAbundSolar.addEventListener("click", async () => {
+            await load_abundance_models(true)
+        })
+    }
     // Default to Asplund2009 on startup if no abundance values are set yet.
     const has_values = () => {
         if (!sme || !sme.abund || !sme.abund.data) return false
@@ -35,12 +141,14 @@ if (SelectAbundSolar) {
         }
         return false
     }
-    if (!SelectAbundSolar.value) {
-        SelectAbundSolar.value = "asplund2009"
-    }
-    if (!has_values()) {
-        apply_abundance_model("asplund2009")
-    }
+    load_abundance_models(false).then(() => {
+        if (!SelectAbundSolar.value) {
+            SelectAbundSolar.value = "asplund2009"
+        }
+        if (!has_values()) {
+            apply_abundance_model(SelectAbundSolar.value || "asplund2009")
+        }
+    })
 }
 
 function update_abundance(sme: SmeFile) {

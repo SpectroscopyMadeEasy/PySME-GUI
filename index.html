@@ -481,9 +481,7 @@
                         <span class="input-group-text">Solar abundance:</span>
                       </div>
                       <select class="custom-select" id="select-abund-solar">
-                        <option value="asplund2009">Asplund2009</option>
-                        <option value="grevesse2007">Grevesse2007</option>
-                        <option value="lodders2003">Lodders2003</option>
+                        <option value="" disabled selected>Loading...</option>
                       </select>
                     </div>
                     <div class="dropdown no-arrow">
@@ -494,6 +492,7 @@
                       <div class="dropdown-menu dropdown-menu-right  animated--fade-in"
                         aria-labelledby="dropdownMenuLink">
                         <div class="dropdown-header">Options</div>
+                        <span class="dropdown-item" id="btn-abund-refresh">Refresh solar abundance list</span>
                       </div>
                     </div>
                   </div>
