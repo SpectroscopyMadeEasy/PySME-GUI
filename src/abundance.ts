@@ -7,44 +7,41 @@ addEventListener("pysme_load", (event: any) => {
     }
 })
 
-var BtnAbundAsplund2009 = document.getElementById("btn-abund-asplund2009") as HTMLButtonElement
-BtnAbundAsplund2009.addEventListener("click", async (event) => {
-    console.log("Resetting Abundance to Asplund2009")
+async function apply_abundance_model(model: string) {
+    console.log("Resetting Abundance to " + model)
     let tmpout = tmp.fileSync({ postfix: ".dat" });
-    let success = await call_python("get_abundance_values.py", [tmpout.name, "asplund2009"])
+    let success = await call_python("get_abundance_values.py", [tmpout.name, model])
     var content: Buffer = fs.readFileSync(tmpout.name, { encoding: null })
     var abund = new Float64Array(content.buffer, content.byteOffset, content.length / Float64Array.BYTES_PER_ELEMENT)
     sme.abund.data = abund
     sme.abund.header["format"] = "H=12"
     sme.abund.header["monh"] = 0
     cast_load_event(sme, "abundance")
-})
+}
 
-var BtnAbundGrevesse2007 = document.getElementById("btn-abund-grevesse2007") as HTMLButtonElement
-BtnAbundAsplund2009.addEventListener("click", async (event) => {
-    console.log("Resetting Abundance to Grevesse2007")
-    let tmpout = tmp.fileSync({ postfix: ".dat" });
-    let success = await call_python("get_abundance_values.py", [tmpout.name, "grevesse2007"])
-    var content: Buffer = fs.readFileSync(tmpout.name, { encoding: null })
-    var abund = new Float64Array(content.buffer, content.byteOffset, content.length / Float64Array.BYTES_PER_ELEMENT)
-    sme.abund.data = abund
-    sme.abund.header["format"] = "H=12"
-    sme.abund.header["monh"] = 0
-    cast_load_event(sme, "abundance")
-})
-
-var BtnAbundLodders2003 = document.getElementById("btn-abund-lodders2003") as HTMLButtonElement
-BtnAbundAsplund2009.addEventListener("click", async (event) => {
-    console.log("Resetting Abundance to Lodders2003")
-    let tmpout = tmp.fileSync({ postfix: ".dat" });
-    let success = await call_python("get_abundance_values.py", [tmpout.name, "lodders2003"])
-    var content: Buffer = fs.readFileSync(tmpout.name, { encoding: null })
-    var abund = new Float64Array(content.buffer, content.byteOffset, content.length / Float64Array.BYTES_PER_ELEMENT)
-    sme.abund.data = abund
-    sme.abund.header["format"] = "H=12"
-    sme.abund.header["monh"] = 0
-    cast_load_event(sme, "abundance")
-})
+const SelectAbundSolar = document.getElementById("select-abund-solar") as HTMLSelectElement | null
+if (SelectAbundSolar) {
+    SelectAbundSolar.addEventListener("change", async () => {
+        let model = SelectAbundSolar.value
+        if (!model) return
+        await apply_abundance_model(model)
+    })
+    // Default to Asplund2009 on startup if no abundance values are set yet.
+    const has_values = () => {
+        if (!sme || !sme.abund || !sme.abund.data) return false
+        for (let i = 0; i < sme.abund.data.length; i++) {
+            let v = Number(sme.abund.data[i])
+            if (Number.isFinite(v) && v !== 0) return true
+        }
+        return false
+    }
+    if (!SelectAbundSolar.value) {
+        SelectAbundSolar.value = "asplund2009"
+    }
+    if (!has_values()) {
+        apply_abundance_model("asplund2009")
+    }
+}
 
 function update_abundance(sme: SmeFile) {
     for (let i = 0; i < elements.length; i++) {

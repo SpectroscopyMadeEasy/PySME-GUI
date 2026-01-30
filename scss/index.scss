@@ -626,6 +626,26 @@ body,
     border-color: var(--app-border);
     color: var(--app-text);
 }
+
+.abundance-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-content: space-between;
+}
+
+.abundance-header-actions .abundance-solar-select {
+    width: auto;
+}
+
+.abundance-header-actions .dropdown {
+    flex: 0 0 auto;
+}
+
+.abundance-header-actions .abundance-solar-select .custom-select {
+    width: auto;
+    min-width: 0;
+}
 .table {
     color: var(--app-text);
 }
