@@ -11,6 +11,7 @@ addEventListener("pysme_load", (event: any) => {
 
 let abundance_baseline: Float64Array | null = null
 let abundance_baseline_model: string | null = null
+const AbundanceSummary = document.getElementById("abundance-summary")
 
 async function fetch_abundance_values(model: string): Promise<Float64Array | null> {
     let tmpout = tmp.fileSync({ postfix: ".dat" })
@@ -28,7 +29,9 @@ function update_abundance_highlights() {
         cell.classList.remove("abundance-modified")
         if (!abundance_baseline || !abundance_baseline_model || abundance_baseline_model === "empty") continue
         const baseline = Number(abundance_baseline[i])
-        const current = Number(sme.abund.data[i])
+        const field = document.getElementById(`par-abund-input-${element}`) as HTMLInputElement | null
+        const raw = field ? String(field.value).trim() : ""
+        const current = raw === "" ? NaN : Number(raw)
         const baseline_ok = Number.isFinite(baseline)
         const current_ok = Number.isFinite(current)
         if (!baseline_ok && current_ok) {
@@ -42,13 +45,61 @@ function update_abundance_highlights() {
     }
 }
 
+function ensure_abundance_used_row(element: string): HTMLDivElement | null {
+    const cell = document.getElementById(`par-abund-${element}`)
+    if (!cell) return null
+    let used = cell.querySelector(".abundance-used") as HTMLDivElement | null
+    if (!used) {
+        used = document.createElement("div")
+        used.className = "abundance-used text-nowrap"
+        cell.appendChild(used)
+    }
+    return used
+}
+
+function get_monh_value(): number {
+    const from_field = MonhField ? Number(MonhField.value) : NaN
+    if (Number.isFinite(from_field)) return from_field
+    const from_sme = Number(sme?.abund?.header?.monh)
+    return Number.isFinite(from_sme) ? from_sme : 0
+}
+
+function update_abundance_used() {
+    const monh_value = get_monh_value()
+    for (let i = 0; i < elements.length; i++) {
+        const element = elements[i]
+        const used = ensure_abundance_used_row(element)
+        if (!used) continue
+        const base = Number(sme.abund.data[i])
+        if (!Number.isFinite(base)) {
+            used.textContent = ""
+            continue
+        }
+        const applied = (i >= 2) ? base + monh_value : base
+        used.textContent = applied.toFixed(2)
+    }
+}
+
+function update_abundance_summary() {
+    if (!AbundanceSummary) return
+    const monh_value = get_monh_value()
+    const fe_index = elements_dict["Fe"]
+    const base = sme?.abund?.data ? Number(sme.abund.data[fe_index]) : NaN
+    const solar = abundance_baseline ? Number(abundance_baseline[fe_index]) : NaN
+    if (!Number.isFinite(base) || !Number.isFinite(solar)) {
+        AbundanceSummary.textContent = "Effective [Fe/H]: —"
+        return
+    }
+    const eff = (base + monh_value) - solar
+    AbundanceSummary.textContent = `Effective [Fe/H]: ${eff.toFixed(2)}`
+}
+
 async function apply_abundance_model(model: string, values?: Float64Array | null) {
     console.log("Resetting Abundance to " + model)
     let abund = values || await fetch_abundance_values(model)
     if (!abund) return
     sme.abund.data = abund
     sme.abund.header["format"] = "H=12"
-    sme.abund.header["monh"] = 0
     cast_load_event(sme, "abundance")
 }
 
@@ -175,6 +226,8 @@ if (SelectAbundSolar) {
         const values = await ensure_abundance_baseline(model)
         await apply_abundance_model(model, values)
         update_abundance_highlights()
+        update_abundance_used()
+        update_abundance_summary()
     })
     if (RefreshAbundSolar) {
         RefreshAbundSolar.addEventListener("click", async () => {
@@ -188,6 +241,8 @@ if (SelectAbundSolar) {
             const values = await ensure_abundance_baseline(model)
             await apply_abundance_model(model, values)
             update_abundance_highlights()
+            update_abundance_used()
+            update_abundance_summary()
         })
     }
     // Default to Asplund2009 on startup if no abundance values are set yet.
@@ -209,6 +264,8 @@ if (SelectAbundSolar) {
             await apply_abundance_model(model, values)
         }
         update_abundance_highlights()
+        update_abundance_used()
+        update_abundance_summary()
     })
 }
 
@@ -224,6 +281,8 @@ function update_abundance(sme: SmeFile) {
         }
     }
     update_abundance_highlights()
+    update_abundance_used()
+    update_abundance_summary()
 }
 
 // All the elements that can be used in SME (the first 100)
@@ -265,7 +324,7 @@ clear_abundance_inputs_if_nan()
 for (let i = 0; i < elements.length; i++) {
     const element = elements[i];
     let field = document.getElementById(`par-abund-input-${element}`)
-    field.addEventListener("change", async (event: any) => {
+    const handler = async (event: any) => {
         let i = elements_dict[element]
         let raw = String(event.target.value).trim()
         if (raw === "") {
@@ -279,5 +338,19 @@ for (let i = 0; i < elements.length; i++) {
             await ensure_abundance_baseline(model)
         }
         update_abundance_highlights()
-    })
+        update_abundance_used()
+        update_abundance_summary()
+    }
+    field.addEventListener("change", handler)
+    field.addEventListener("input", handler)
+}
+
+const MonhField = document.getElementById("par-monh") as HTMLInputElement | null
+if (MonhField) {
+    const monhHandler = () => {
+        update_abundance_used()
+        update_abundance_summary()
+    }
+    MonhField.addEventListener("change", monhHandler)
+    MonhField.addEventListener("input", monhHandler)
 }

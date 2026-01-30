@@ -657,6 +657,16 @@ body,
 .abundance-header-actions .abundance-solar-select .input-group-text {
     white-space: nowrap;
 }
+
+.abundance-summary {
+    margin-bottom: 0.5rem;
+}
+
+.abundance-used {
+    font-size: 0.8rem;
+    color: var(--app-text-muted);
+    margin-top: 0.2rem;
+}
 .table {
     color: var(--app-text);
 }
