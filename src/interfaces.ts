@@ -162,6 +162,11 @@ interface SpectrumStoreState {
     spectra: SpectrumEntry[];
     active_id: string | null;
     fit_target_id: string | null;
+    linelist?: {
+        header: any;
+        data: any[];
+        file?: string;
+    } | null;
     counters: {
         synth: number;
         obs: number;

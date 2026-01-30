@@ -34,6 +34,7 @@ ButtonLinelistLoad.addEventListener("click", async (event) => {
             sme.system_info.header["linelist_file"] = fname
             let store: any = (window as any).spectrum_store
             if (store && Array.isArray(store.spectra)) {
+                store.linelist = { header: sme.linelist.header, data: sme.linelist.data, file: fname }
                 store.spectra.forEach((entry: any) => {
                     if (!entry || !entry.sme) return
                     entry.sme.linelist = { header: sme.linelist.header, data: sme.linelist.data }
@@ -102,6 +103,11 @@ function show_linelist(sme: SmeFile) {
     })
 
     if (columns.length === 0) {
+        if (LinelistTable) {
+            LinelistTable.destroy(false)
+            LinelistTable = null
+        }
+        $('#table-linelist').empty()
         return
     }
 

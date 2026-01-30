@@ -296,6 +296,30 @@ function create_empty_sme_structure() {
 var sme = create_empty_sme_structure();
 var sme_loaded_from_file = false;
 
+function apply_global_linelist(target: SmeFile) {
+    if (!target) return
+    const store: SpectrumStoreState | null = (window as any).spectrum_store || null
+    const store_list = store && store.linelist ? store.linelist : null
+    const global_has = store_list && Array.isArray(store_list.data) && store_list.data.length > 0
+        ? true
+        : sme && sme.linelist && Array.isArray(sme.linelist.data) && sme.linelist.data.length > 0
+    const target_has = target.linelist && Array.isArray(target.linelist.data) && target.linelist.data.length > 0
+    if (global_has && !target_has) {
+        target.linelist = {
+            header: store_list ? store_list.header : sme.linelist.header,
+            data: store_list ? store_list.data : sme.linelist.data,
+        }
+    }
+    const global_file = store_list && store_list.file
+        ? store_list.file
+        : (sme.system_info && sme.system_info.header ? sme.system_info.header["linelist_file"] : "")
+    if (global_file) {
+        if (!target.system_info) target.system_info = { header: {} }
+        if (!target.system_info.header) target.system_info.header = {}
+        target.system_info.header["linelist_file"] = global_file
+    }
+}
+
 var spectrum_palette = [
     "#ff7f0e",
     "#2ca02c",
@@ -330,14 +354,18 @@ function make_spectrum_entry(store: SpectrumStoreState, kind: SpectrumKind, name
 
 function add_synth_spectrum(store: SpectrumStoreState, name?: string, sme_data?: SmeFile | null) {
     store.counters.synth += 1
-    let entry = make_spectrum_entry(store, "synth", name || ("Synth Spectrum " + store.counters.synth), sme_data || null, "params")
+    let local_sme = sme_data || create_empty_sme_structure()
+    apply_global_linelist(local_sme)
+    let entry = make_spectrum_entry(store, "synth", name || ("Synth Spectrum " + store.counters.synth), local_sme, "params")
     store.spectra.push(entry)
     return entry
 }
 
 function add_observed_spectrum(store: SpectrumStoreState, name?: string, sme_data?: SmeFile | null) {
     store.counters.obs += 1
-    let entry = make_spectrum_entry(store, "obs", name || ("Observed Spectrum " + store.counters.obs), sme_data || null, "file")
+    let local_sme = sme_data || create_empty_sme_structure()
+    apply_global_linelist(local_sme)
+    let entry = make_spectrum_entry(store, "obs", name || ("Observed Spectrum " + store.counters.obs), local_sme, "file")
     store.spectra.push(entry)
     return entry
 }
@@ -367,6 +395,7 @@ function create_spectrum_store(initial_sme: SmeFile) {
         spectra: [],
         active_id: null,
         fit_target_id: null,
+        linelist: null,
         counters: { synth: 0, obs: 0, fit: 0 },
     }
     return store
@@ -378,6 +407,7 @@ var spectrum_store = create_spectrum_store(sme);
 function ensure_entry_sme(entry: SpectrumEntry) {
     if (!entry.sme) {
         entry.sme = create_empty_sme_structure()
+        apply_global_linelist(entry.sme)
     }
 }
 
@@ -876,7 +906,10 @@ async function synthesize_from_params() {
         throw new Error("Missing wavelength range")
     }
 
-    let linelist_file = sme.system_info && sme.system_info.header ? sme.system_info.header["linelist_file"] : ""
+    const store: SpectrumStoreState | null = (window as any).spectrum_store || null
+    let linelist_file = store && store.linelist && store.linelist.file
+        ? store.linelist.file
+        : (sme.system_info && sme.system_info.header ? sme.system_info.header["linelist_file"] : "")
     if (!linelist_file) {
         show_error("Please load a linelist file before synthesizing.")
         throw new Error("Missing linelist file")
@@ -966,6 +999,7 @@ ButtonLoad.addEventListener('click', async (event) => {
                 return
             }
             let obs_sme = build_observed_sme_from_segments(parsed.segments, parsed.has_uncs)
+            apply_global_linelist(obs_sme)
             let name = "Observed " + basename(fname)
             let obs_entry = add_observed_spectrum(spectrum_store, name, obs_sme)
             activate_spectrum_entry(obs_entry)
@@ -979,6 +1013,7 @@ ButtonLoad.addEventListener('click', async (event) => {
 var ButtonNewSpectrum = document.getElementById("btn-new-spectrum")
 ButtonNewSpectrum.addEventListener('click', () => {
     let new_sme = create_empty_sme_structure()
+    apply_global_linelist(new_sme)
     let entry = add_synth_spectrum(spectrum_store, undefined, new_sme)
     activate_spectrum_entry(entry)
     render_spectrum_list()
