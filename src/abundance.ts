@@ -9,12 +9,43 @@ addEventListener("pysme_load", (event: any) => {
     }
 })
 
-async function apply_abundance_model(model: string) {
-    console.log("Resetting Abundance to " + model)
-    let tmpout = tmp.fileSync({ postfix: ".dat" });
+let abundance_baseline: Float64Array | null = null
+let abundance_baseline_model: string | null = null
+
+async function fetch_abundance_values(model: string): Promise<Float64Array | null> {
+    let tmpout = tmp.fileSync({ postfix: ".dat" })
     let success = await call_python("get_abundance_values.py", [tmpout.name, model])
+    if (!success) return null
     var content: Buffer = fs.readFileSync(tmpout.name, { encoding: null })
-    var abund = new Float64Array(content.buffer, content.byteOffset, content.length / Float64Array.BYTES_PER_ELEMENT)
+    return new Float64Array(content.buffer, content.byteOffset, content.length / Float64Array.BYTES_PER_ELEMENT)
+}
+
+function update_abundance_highlights() {
+    for (let i = 0; i < elements.length; i++) {
+        const element = elements[i]
+        const cell = document.getElementById(`par-abund-${element}`)
+        if (!cell) continue
+        cell.classList.remove("abundance-modified")
+        if (!abundance_baseline || !abundance_baseline_model || abundance_baseline_model === "empty") continue
+        const baseline = Number(abundance_baseline[i])
+        const current = Number(sme.abund.data[i])
+        const baseline_ok = Number.isFinite(baseline)
+        const current_ok = Number.isFinite(current)
+        if (!baseline_ok && current_ok) {
+            cell.classList.add("abundance-modified")
+            continue
+        }
+        if (!baseline_ok || !current_ok) continue
+        if (Math.abs(current - baseline) > 1e-6) {
+            cell.classList.add("abundance-modified")
+        }
+    }
+}
+
+async function apply_abundance_model(model: string, values?: Float64Array | null) {
+    console.log("Resetting Abundance to " + model)
+    let abund = values || await fetch_abundance_values(model)
+    if (!abund) return
     sme.abund.data = abund
     sme.abund.header["format"] = "H=12"
     sme.abund.header["monh"] = 0
@@ -23,6 +54,7 @@ async function apply_abundance_model(model: string) {
 
 const SelectAbundSolar = document.getElementById("select-abund-solar") as HTMLSelectElement | null
 const RefreshAbundSolar = document.getElementById("btn-abund-refresh")
+const RestoreAbundSolar = document.getElementById("btn-abund-restore")
 
 function get_abundance_cache_path(): string | null {
     try {
@@ -105,6 +137,21 @@ function write_abundance_cache(models: string[]) {
     }
 }
 
+async function ensure_abundance_baseline(model: string): Promise<Float64Array | null> {
+    if (!model || model.toLowerCase() === "empty") {
+        abundance_baseline = null
+        abundance_baseline_model = model
+        return null
+    }
+    if (abundance_baseline && abundance_baseline_model === model) {
+        return abundance_baseline
+    }
+    const values = await fetch_abundance_values(model)
+    abundance_baseline = values ? new Float64Array(values) : null
+    abundance_baseline_model = model
+    return values
+}
+
 async function load_abundance_models(force_refresh = false): Promise<string[]> {
     let models: string[] | null = null
     if (!force_refresh) {
@@ -125,11 +172,22 @@ if (SelectAbundSolar) {
     SelectAbundSolar.addEventListener("change", async () => {
         let model = SelectAbundSolar.value
         if (!model) return
-        await apply_abundance_model(model)
+        const values = await ensure_abundance_baseline(model)
+        await apply_abundance_model(model, values)
+        update_abundance_highlights()
     })
     if (RefreshAbundSolar) {
         RefreshAbundSolar.addEventListener("click", async () => {
             await load_abundance_models(true)
+        })
+    }
+    if (RestoreAbundSolar) {
+        RestoreAbundSolar.addEventListener("click", async () => {
+            const model = SelectAbundSolar.value
+            if (!model) return
+            const values = await ensure_abundance_baseline(model)
+            await apply_abundance_model(model, values)
+            update_abundance_highlights()
         })
     }
     // Default to Asplund2009 on startup if no abundance values are set yet.
@@ -141,13 +199,16 @@ if (SelectAbundSolar) {
         }
         return false
     }
-    load_abundance_models(false).then(() => {
+    load_abundance_models(false).then(async () => {
         if (!SelectAbundSolar.value) {
             SelectAbundSolar.value = "asplund2009"
         }
+        const model = SelectAbundSolar.value || "asplund2009"
+        const values = await ensure_abundance_baseline(model)
         if (!has_values()) {
-            apply_abundance_model(SelectAbundSolar.value || "asplund2009")
+            await apply_abundance_model(model, values)
         }
+        update_abundance_highlights()
     })
 }
 
@@ -162,6 +223,7 @@ function update_abundance(sme: SmeFile) {
             field.value = String(value)
         }
     }
+    update_abundance_highlights()
 }
 
 // All the elements that can be used in SME (the first 100)
@@ -203,7 +265,7 @@ clear_abundance_inputs_if_nan()
 for (let i = 0; i < elements.length; i++) {
     const element = elements[i];
     let field = document.getElementById(`par-abund-input-${element}`)
-    field.addEventListener("change", (event: any) => {
+    field.addEventListener("change", async (event: any) => {
         let i = elements_dict[element]
         let raw = String(event.target.value).trim()
         if (raw === "") {
@@ -212,5 +274,10 @@ for (let i = 0; i < elements.length; i++) {
             let value = Number(raw)
             sme.abund.data[i] = value
         }
+        const model = SelectAbundSolar?.value || ""
+        if (!abundance_baseline || abundance_baseline_model !== model) {
+            await ensure_abundance_baseline(model)
+        }
+        update_abundance_highlights()
     })
 }

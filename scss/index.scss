@@ -650,6 +650,10 @@ body,
     flex: 0 0 auto;
 }
 
+.abundance-header-actions .abundance-restore-btn {
+    white-space: nowrap;
+}
+
 .abundance-header-actions .abundance-solar-select .input-group-text {
     white-space: nowrap;
 }
@@ -659,6 +663,16 @@ body,
 .table th,
 .table td {
     border-color: var(--app-border);
+}
+
+.abundance-element.abundance-modified {
+    box-shadow: inset 0 0 0 1px rgba(91, 124, 254, 0.6);
+    background-color: rgba(91, 124, 254, 0.08);
+}
+
+html[data-theme="dark"] .abundance-element.abundance-modified {
+    box-shadow: inset 0 0 0 1px rgba(120, 170, 255, 0.65);
+    background-color: rgba(120, 170, 255, 0.08);
 }
 
 // Abundance table outer border in dark mode: soften the outline
