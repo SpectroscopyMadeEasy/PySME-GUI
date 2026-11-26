@@ -91,12 +91,12 @@ def _zip_bytes(entries):
 def test_gui_download_from_github_archive(tmp_path, monkeypatch):
     monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path / "home"))
     monkeypatch.delenv(envmanager.SOURCE_ENV, raising=False)
-    archive = _zip_bytes({"PySME-GUI-desktop-app/pysme_gui/__init__.py": '__version__ = "9.9.9"\n'})
+    archive = _zip_bytes({"PySME-GUI-0.3.0a2/pysme_gui/__init__.py": '__version__ = "9.9.9"\n'})
     urls = []
     monkeypatch.setattr(envmanager, "_download", lambda url, timeout=30: urls.append(url) or archive)
-    source = envmanager.fetch_gui_source(str(tmp_path), log=lambda text: None)
+    source = envmanager.fetch_gui_source(str(tmp_path), "v0.3.0a2", log=lambda text: None)
     assert os.path.isfile(os.path.join(source, "pysme_gui", "__init__.py"))
-    assert urls == ["https://codeload.github.com/SpectroscopyMadeEasy/PySME-GUI/zip/refs/heads/desktop-app"]
+    assert urls == ["https://codeload.github.com/SpectroscopyMadeEasy/PySME-GUI/zip/refs/tags/v0.3.0a2"]
 
 
 def test_gui_download_rejects_unsafe_paths(tmp_path, monkeypatch):
@@ -107,5 +107,21 @@ def test_gui_download_rejects_unsafe_paths(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     with pytest.raises(RuntimeError, match="unsafe"):
-        envmanager.fetch_gui_source(str(work), log=lambda text: None)
+        envmanager.fetch_gui_source(str(work), "v0.3.0a2", log=lambda text: None)
     assert not (work / "escape.txt").exists()
+
+
+def test_appearance_is_remembered_and_written_into_the_page(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path))
+    app, base = server
+    assert b'<html lang="en">' in request(base, "/")[1]
+    assert request(base, "/api/settings/theme", token=app.token, body={"theme": "dark"})[0] == 200
+    # A new start (another server and port) still knows it.
+    for path in ("/", "/index.html"):
+        assert b'<html lang="en" data-theme="dark">' in request(base, path)[1]
+    assert envmanager.settings()["theme"] == "dark"
+    envmanager.set_channel("beta")
+    assert envmanager.settings() == {"theme": "dark", "channel": "beta"}
+    request(base, "/api/settings/theme", token=app.token, body={"theme": "auto"})
+    assert b'<html lang="en">' in request(base, "/")[1]
+    assert request(base, "/api/settings/theme", token=app.token, body={"theme": '"><script>'})[0] == 400

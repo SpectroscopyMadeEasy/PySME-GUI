@@ -4,11 +4,11 @@ This module must stay importable without PySME installed: the installer and
 updater read the version from here.
 """
 
-__version__ = "1.0.0"
+__version__ = "0.3.0a1"
 
-# Where the one-click updater looks for a newer GUI.
+# The one-click updater installs release tags (v0.3.0a1, ...) of this repository.
+# Pushing a branch releases nothing; see RELEASING.md.
 UPDATE_REPO = "SpectroscopyMadeEasy/PySME-GUI"
-UPDATE_REF = "desktop-app"
 
 # PySME versions this interface works with (pysme-astro on PyPI). New users get
 # the recommended one; test it with this interface before every release. Users

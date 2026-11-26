@@ -28,6 +28,7 @@ from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+THEMES = ("auto", "light", "dark")
 MAX_BODY = 5_000_000
 
 
@@ -92,12 +93,16 @@ class Updater:
         return own_constants()
 
     def check(self):
-        result = {"checked": time.strftime("%H:%M"), "errors": [], "gui": None, "releases": None}
+        result = {"checked": time.strftime("%H:%M"), "errors": [], "gui": None, "releases": None,
+                  "gui_note": None}
         newer = envmanager.version_key
         constants = self.constants()
         try:
             published = envmanager.latest_gui()
             result["gui"] = published["version"]
+        except envmanager.NoRelease as exc:
+            published = None
+            result["gui_note"] = str(exc)
         except Exception as exc:
             published = None
             result["errors"].append(f"Interface: {exc}")
@@ -145,7 +150,6 @@ class Updater:
         managed = is_managed()
         constants = self.constants()
         record = envmanager.current_record() if managed else {}
-        repo, ref = envmanager.update_target()
         environments = self._environments(constants) if managed else []
         previous = envmanager.gui_info(record.get("previous_gui"))
         gui_id = envmanager.selection(record)[0]
@@ -163,7 +167,9 @@ class Updater:
             "managed": managed,
             "custom_python": envmanager.settings().get("python"),
             "home": envmanager.app_home(),
-            "source": os.environ.get(envmanager.SOURCE_ENV) or f"{repo} @ {ref}",
+            "source": os.environ.get(envmanager.SOURCE_ENV)
+            or f"release tags of {envmanager.update_repository()}",
+            "channel": envmanager.channel(),
             # A reinstall of the same release is not worth offering to go back to.
             "previous_gui": (
                 previous["version"]
@@ -230,6 +236,16 @@ class Updater:
 
         self._start("Updating the interface", action,
                     "Interface updated. PySME is unchanged.")
+
+    def set_channel(self, name):
+        with self._lock:
+            self._require_idle()
+            try:
+                envmanager.set_channel(name)
+            except RuntimeError as exc:
+                raise UserError(str(exc))
+        # The earlier answer was for another channel.
+        self.check()
 
     def rollback_gui(self):
         self._start("Going back to the previous interface",
@@ -299,6 +315,21 @@ def set_custom_python(path):
     chosen["python"] = path
     envmanager.write_settings(chosen)
     return version
+
+
+def set_theme(theme):
+    if theme not in THEMES:
+        raise UserError("Unknown appearance.")
+    envmanager.write_settings(dict(envmanager.settings(), theme=theme))
+
+
+def index_page():
+    with open(os.path.join(STATIC, "index.html"), "rb") as handle:
+        page = handle.read()
+    theme = envmanager.settings().get("theme")
+    if theme in ("light", "dark"):
+        page = page.replace(b'<html lang="en">', f'<html lang="en" data-theme="{theme}">'.encode(), 1)
+    return page
 
 
 def list_directory(path):
@@ -416,6 +447,9 @@ class App:
         if route == "update/check":
             self.updater.check()
             return self.updater.info()
+        if route == "update/channel":
+            self.updater.set_channel(body.get("channel"))
+            return self.updater.info()
         if route == "update/gui":
             self.updater.update_gui()
             return self.updater.info()
@@ -443,6 +477,9 @@ class App:
         if route == "update/rollback":
             self.updater.rollback_gui()
             return self.updater.info()
+        if route == "settings/theme":
+            set_theme(body.get("theme"))
+            return {}
         if route == "settings/python":
             version = set_custom_python(body.get("python"))
             result = self.updater.info()
@@ -539,7 +576,9 @@ def make_handler(app):
 
                 path = os.path.join(os.path.dirname(plotly.__file__), "package_data", "plotly.min.js")
                 return self._file(path, cache=True)
-            name = "index.html" if url.path == "/" else url.path.lstrip("/")
+            if url.path in ("/", "/index.html"):
+                return self._send(200, index_page(), "text/html; charset=utf-8")
+            name = url.path.lstrip("/")
             path = os.path.realpath(os.path.join(STATIC, name))
             if not path.startswith(os.path.realpath(STATIC) + os.sep):
                 return self._json({"error": "Not found"}, 404)

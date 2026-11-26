@@ -35,7 +35,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -44,6 +43,16 @@ PYTHON_VERSION = "3.12"
 PACKAGE = "pysme-astro"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 SOURCE_ENV = "PYSME_GUI_UPDATE_SOURCE"
+
+# Interface releases are git tags. Older tags belong to the Electron program.
+RELEASE_TAG = re.compile(rb"refs/tags/v(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?)(?=[\s\x00^]|$)")
+FIRST_RELEASE = "0.3.0a1"
+# Each update channel also receives everything from the ones before it.
+CHANNELS = ("stable", "beta", "alpha")
+
+
+class NoRelease(RuntimeError):
+    """Nothing has been published for the chosen channel."""
 
 
 def app_home():
@@ -116,6 +125,30 @@ def is_prerelease(text):
     return version_key(text)[1] < 4
 
 
+def stage(version):
+    """The channel a release belongs to: alpha, beta (also rc) or stable."""
+    rank = version_key(version)[1]
+    return "stable" if rank >= 4 else "beta" if rank >= 2 else "alpha"
+
+
+def in_channel(version, channel):
+    return CHANNELS.index(stage(version)) <= CHANNELS.index(channel)
+
+
+def channel():
+    """Which interface releases the user receives."""
+    chosen = settings().get("channel")
+    if chosen in CHANNELS:
+        return chosen
+    return stage(package_constants(os.path.dirname(os.path.abspath(__file__)))["version"])
+
+
+def set_channel(name):
+    if name not in CHANNELS:
+        raise RuntimeError(f"Unknown update channel: {name}")
+    write_settings(dict(settings(), channel=name))
+
+
 def _constant(text, name):
     match = re.search(rf'^{name}\s*=\s*"([^"]*)"', text, re.M)
     return match.group(1) if match else None
@@ -131,7 +164,6 @@ def read_constants(init_text):
             ("minimum", "PYSME_MINIMUM"),
             ("below", "PYSME_BELOW"),
             ("repo", "UPDATE_REPO"),
-            ("ref", "UPDATE_REF"),
         )
     }
 
@@ -466,6 +498,8 @@ def setup(source, bundle_id=None, repair=False, log=print):
         shutil.rmtree(gui_dir(gui_id), ignore_errors=True)
         raise
     activate(gui_id, env_id, bundle_id=bundle_id, notice=notice, log=log)
+    if settings().get("channel") not in CHANNELS:
+        set_channel(stage(constants["version"]))
     if replaced and not _is_running_from(env_dir(replaced)):
         remove_env(replaced, log=log)
     log(f"Using PySME {env_info(env_id)['pysme_version']} with PySME-GUI {constants['version']}.")
@@ -506,11 +540,16 @@ def use_env(env_id, log=print):
 
 
 def update_gui(log=print):
-    """Install the newest interface. The PySME in use is not changed."""
-    _, env = _current_parts()
+    """Install the newest interface release. The PySME in use is not changed."""
+    current, env = _current_parts()
+    published = latest_gui()
+    if version_key(published["version"]) <= version_key(gui_info(current)["version"]):
+        raise RuntimeError("There is no newer interface.")
     with tempfile.TemporaryDirectory(prefix="pysme-gui-update-") as temp:
-        source = fetch_gui_source(temp, log)
+        source = fetch_gui_source(temp, published.get("tag"), log)
         constants = package_constants(os.path.join(source, "pysme_gui"))
+        if constants["version"] != published["version"]:
+            raise RuntimeError("The downloaded interface is not the announced version.")
         if not supports(constants, env["pysme_version"]):
             raise RuntimeError(
                 f"The new interface needs PySME {supported_text(constants)}, but you are using "
@@ -545,11 +584,9 @@ def rollback_gui(log=print):
 # ------------------------------------------------------------------- online
 
 
-def update_target():
+def update_repository():
     constants = package_constants(os.path.dirname(os.path.abspath(__file__)))
-    chosen = settings()
-    return (chosen.get("update_repo") or constants["repo"],
-            chosen.get("update_ref") or constants["ref"])
+    return settings().get("update_repo") or constants["repo"]
 
 
 def _download(url, timeout=30):
@@ -624,29 +661,47 @@ def available_pysme():
     return parse_releases(json.loads(_download(PYPI_URL, timeout=40)))
 
 
+def parse_tags(advertisement):
+    """Release versions among the tags in git's list of references."""
+    found = {m.decode() for m in RELEASE_TAG.findall(advertisement)}
+    first = version_key(FIRST_RELEASE)
+    return sorted((v for v in found if version_key(v) >= first), key=version_key, reverse=True)
+
+
+def published_releases():
+    # The list git itself reads. Unlike the web API it has no hourly limit,
+    # which users behind one shared address would quickly reach.
+    url = f"https://github.com/{update_repository()}.git/info/refs?service=git-upload-pack"
+    return parse_tags(_download(url))
+
+
 def latest_gui():
-    """Constants of the newest published interface."""
+    """Constants of the newest interface release in the user's channel."""
     local = os.environ.get(SOURCE_ENV)
     if local:
         return package_constants(os.path.join(local, "pysme_gui"))
-    repo, ref = update_target()
-    url = f"https://raw.githubusercontent.com/{repo}/{ref}/pysme_gui/__init__.py"
-    try:
-        return read_constants(_download(url).decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            raise RuntimeError(f"nothing published yet at {repo}, branch '{ref}'") from exc
-        raise
+    chosen = channel()
+    allowed = [v for v in published_releases() if in_channel(v, chosen)]
+    if not allowed:
+        raise NoRelease("No interface release has been published for this channel yet.")
+    tag = f"v{allowed[0]}"
+    url = f"https://raw.githubusercontent.com/{update_repository()}/{tag}/pysme_gui/__init__.py"
+    constants = read_constants(_download(url).decode("utf-8"))
+    if constants["version"] != allowed[0]:
+        raise RuntimeError(
+            f"Release {tag} is faulty: its code calls itself {constants['version']}."
+        )
+    return dict(constants, tag=tag)
 
 
-def fetch_gui_source(directory, log=print):
-    """Return a directory that contains the newest ``pysme_gui`` package."""
+def fetch_gui_source(directory, tag, log=print):
+    """Return a directory that contains the ``pysme_gui`` package of ``tag``."""
     local = os.environ.get(SOURCE_ENV)
     if local:
         log(f"Using GUI source from {local}")
         return local
-    repo, ref = update_target()
-    url = f"https://codeload.github.com/{repo}/zip/refs/heads/{ref}"
+    repo = update_repository()
+    url = f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}"
     log(f"Downloading {url}")
     archive = os.path.join(directory, "gui.zip")
     with open(archive, "wb") as handle:
@@ -662,7 +717,7 @@ def fetch_gui_source(directory, log=print):
         candidate = os.path.join(target, name)
         if os.path.isfile(os.path.join(candidate, "pysme_gui", "__init__.py")):
             return candidate
-    raise RuntimeError(f"No pysme_gui package found in {repo}@{ref}.")
+    raise RuntimeError(f"No pysme_gui package found in {repo}@{tag}.")
 
 
 def main(argv=None):

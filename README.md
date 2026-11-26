@@ -4,6 +4,14 @@ A desktop interface for [PySME](https://github.com/SpectroscopyMadeEasy/PySME):
 set up a star, synthesize a spectrum, compare it with an observation, edit the
 mask, and fit stellar parameters or abundances.
 
+**This is an alpha version** for internal testing (see
+[RELEASING.md](RELEASING.md)).
+
+![PySME-GUI after a fit, shown in light mode above the diagonal and in dark mode below it](assets/screenshot-light-dark.png)
+
+*The solar example fitted to a simulated observation (upper left: light mode,
+lower right: dark mode).*
+
 ## Install
 
 ### macOS (Apple Silicon, macOS 14 or newer)
@@ -30,8 +38,9 @@ linux/install.sh
 This adds a `pysme-gui` command and a menu entry. The interface opens in your web
 browser. `linux/install.sh --uninstall` removes it.
 
-Intel Macs and Windows are not supported because PySME publishes no binary
-packages for them.
+Windows is planned for 0.3.0 and **does not work yet** (see
+[RELEASING.md](RELEASING.md)). Linux has not been tried on a real computer yet.
+Intel Macs are not supported because PySME publishes no binary packages for them.
 
 ## Using it
 
@@ -47,6 +56,9 @@ packages for them.
   pixels.
 - **Fit:** pick free parameters in the *Fit* tab, or tick *Fit this abundance* in
   the periodic table, then press *Fit*.
+- **Light or dark:** the button at the top right (*View → Appearance* on macOS)
+  matches the system, or stays light or dark. The choice is remembered, and
+  exported PNG figures are always light.
 - **Files:** *Save* writes a normal PySME `.sme` file that scripts can load.
   IDL `.inp` / `.sav` files can be opened. Double-clicking an `.sme` file opens
   it in the app.
@@ -69,9 +81,9 @@ The interface and PySME are versioned and updated separately, in *Updates &
 settings*. Updates are checked quietly at start-up (a dot marks the button);
 nothing is installed or switched on its own.
 
-**Interface.** *Update interface* installs the newest one from the GitHub branch
-and checks that it starts with your current PySME; your PySME version is not
-changed. If the new interface does not support that version, it says so and
+**Interface.** *Update interface* installs the newest release tag in your update
+channel (released versions, or beta versions too) and checks that it starts with
+your current PySME; your PySME version is not changed. If the new interface does not support that version, it says so and
 changes nothing. *Back to previous interface* undoes it.
 
 **PySME.** Several versions can be installed side by side. *Install* adds one
@@ -153,21 +165,12 @@ To check the packaged app without clicking through it, start the binary with
 writes `report.json` and `window.png` there, and quits. Add
 `PYSME_GUI_HOME=<empty folder>` to include the first-launch setup.
 
-**Releasing.** Test the interface with `PYSME_RECOMMENDED` (and with any other
-version you want to promise) before releasing. If a new interface needs another
-Python package that PySME does not already bring, existing installations fail
-the start check and keep the old interface: handle that before adding one. A
-change in `static/` that needs something new from the Swift shell only works for
-users who also install the new disk image.
+**Releasing.** Version stages, update channels and the steps for a release are
+in [RELEASING.md](RELEASING.md).
 
-The updater reads `UPDATE_REPO` and `UPDATE_REF` in
-`pysme_gui/__init__.py` (currently branch `desktop-app`). To ship a GUI update,
-raise `__version__` there and push that branch. If the work is merged into
-another branch, change `UPDATE_REF` first.
-
-Set `FEEDBACK_EMAIL` in the same file to the address that should receive problem
+Set `FEEDBACK_EMAIL` in `pysme_gui/__init__.py` to the address that should receive problem
 reports, then rebuild the disk image.
 
-Version 1.0 replaces the earlier Electron prototype, which remains in the history
-of `master`. The example line list `pysme_gui/examples/sun.lin` is the VALD
+This interface (0.3 and later) replaces the earlier Electron program, which
+remains in the history of `master`. The example line list `pysme_gui/examples/sun.lin` is the VALD
 extract from the PySME examples.

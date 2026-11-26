@@ -35,7 +35,14 @@
       <button id="btn-stop" class="danger" data-cmd="stop" title="Stop the current run (⌘.)" hidden>■ Stop</button>
     </div>
     <div class="group">
-      <button id="btn-theme" class="ghost" title="Colour theme">Auto</button>
+      <div class="menu">
+        <button id="btn-theme" class="ghost" aria-haspopup="true" title="Light or dark appearance">◐ Auto</button>
+        <div class="menu-items right" id="menu-theme" hidden>
+          <button data-theme-choice="auto">Match the system</button>
+          <button data-theme-choice="light">Light</button>
+          <button data-theme-choice="dark">Dark</button>
+        </div>
+      </div>
       <button id="btn-settings" class="ghost" data-cmd="settings" title="Versions, updates and settings">Updates &amp; settings<span class="dot" id="update-dot" hidden></span></button>
     </div>
   </header>

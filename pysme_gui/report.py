@@ -101,6 +101,7 @@ def _installation(managed, update_task):
         ("App data", envmanager.app_home()),
         ("Custom Python setting", envmanager.settings().get("python") or "-"),
         ("In use", record.get("current") or "-"),
+        ("Update channel", envmanager.channel()),
         ("Interface installed", envmanager.gui_info(envmanager.selection(record)[0]) or "-"),
         ("PySME installations", ", ".join(
             f"{i['pysme_version']} ({i['created']})" for i in envmanager.installed_envs()

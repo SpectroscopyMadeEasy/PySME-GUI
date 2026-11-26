@@ -26,6 +26,26 @@ struct Paths {
     func python(_ env: String) -> URL { self.env(env).appendingPathComponent("venv/bin/python") }
 }
 
+// BEGIN version order (tests/test_releases.py compiles this part on its own)
+/// 0.3.0a2 < 0.3.0a10 < 0.3.0b1 < 0.3.0rc1 < 0.3.0, as envmanager.version_key
+/// orders them. A plain numeric string comparison gets the last step wrong.
+func versionKey(_ text: String) -> [Int] {
+    let pattern = #"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:(a|b|rc)(\d+))?"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+    else { return [0, 0, 0, 0, 0] }
+    func group(_ i: Int) -> String? {
+        Range(match.range(at: i), in: text).map { String(text[$0]) }
+    }
+    let stage = ["a": 1, "b": 2, "rc": 3][group(4) ?? ""] ?? 4
+    return [1, 2, 3].map { Int(group($0) ?? "0") ?? 0 } + [stage, Int(group(5) ?? "0") ?? 0]
+}
+
+func isOlder(_ a: String, than b: String) -> Bool {
+    versionKey(a).lexicographicallyPrecedes(versionKey(b))
+}
+// END version order
+
 /// The interface and PySME environment in use.
 struct Selection {
     let gui: String
@@ -91,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     var serverURL: URL?
     var pageReady = false
     var pendingFile: String?
+    var themeItems: [String: NSMenuItem] = [:]
     var recent: [String] = []
     var logHandle: FileHandle?
     var startGeneration = 0
@@ -111,6 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         paths = Paths(home: home, resources: Bundle.main.resourceURL!)
         openLog()
         buildMenu()
+        // Before the window appears, so that the setup screen follows it too.
+        applyAppearance(readJSON(paths.settings)["theme"] as? String ?? "auto")
         buildWindow()
         // The build check must not take the keyboard away from other programs.
         if environment["PYSME_GUI_SELFTEST"] == nil { NSApp.activate(ignoringOtherApps: true) }
@@ -190,8 +213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return Selection(gui: gui, env: env, guiVersion: version)
     }
 
+    /// The full version, such as 0.3.0a1. The system's own version fields may
+    /// hold numbers only.
     var bundleVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        Bundle.main.infoDictionary?["PySMEVersion"] as? String ?? "0"
     }
 
     var bundleID: String {
@@ -222,8 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         // A newer app dragged into Applications brings a newer interface with it.
         let installedFrom = readJSON(paths.current)["bundle_id"] as? String
-        if installedFrom != bundleID,
-           bundleVersion.compare(active.guiVersion, options: .numeric) != .orderedAscending {
+        if installedFrom != bundleID, !isOlder(bundleVersion, than: active.guiVersion) {
             install("Updating PySME", "Installing the interface that comes with this app. "
                     + "The PySME version you chose is kept if the interface supports it.")
             return
@@ -641,6 +665,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                   FileManager.default.fileExists(atPath: file.path) else { break }
             composeMail(file, to: body["to"] as? String ?? "",
                         subject: body["subject"] as? String ?? "", body: body["body"] as? String ?? "")
+        case "theme":
+            applyAppearance(body["value"] as? String ?? "auto")
         case "restart":
             startGeneration += 1
             stopServer()
@@ -684,6 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// window, write a screenshot and a short report, then quit.
     func runSelfTest(into directory: String) {
         let script = """
+        const windowAppearance = async () => appearanceName;
         const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const errors = [];
         window.addEventListener('error', (e) => errors.push(String(e.message)));
@@ -693,7 +720,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         for (let i = 0; i < 600 && S.job.state === 'running'; i++) await wait(500);
         await wait(1500);
         const report = await request('report/preview', {});
+        await showSettings();
+        await wait(500);
+        const settingsBody = document.querySelector('#dialog .dialog-body').clientHeight;
+        document.querySelector('#dialog').close();
         return JSON.stringify({
+          theme: currentTheme(), windowAppearance: await windowAppearance(), settingsBody,
           reportOk: report.text.includes('== Versions ==') && report.text.includes('Application log'),
           native: NATIVE, job: S.job.state, error: S.job.error || null,
           pixels: spectrum.segments.reduce((n, s) => n + s.wave.length, 0),
@@ -705,7 +737,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let output = URL(fileURLWithPath: directory)
         try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.web.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
+            let dark = self.window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            self.web.callAsyncJavaScript(script, arguments: ["appearanceName": dark ? "dark" : "light"],
+                                         in: nil, in: .page) { result in
                 var report: String
                 switch result {
                 case .success(let value): report = value as? String ?? "no result"
@@ -758,6 +792,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     // MARK: - menus
 
+    /// "light" or "dark" overrides the system for the whole app; anything else
+    /// follows the system.
+    func applyAppearance(_ theme: String) {
+        let names: [String: NSAppearance.Name] = ["light": .aqua, "dark": .darkAqua]
+        NSApp.appearance = names[theme].flatMap { NSAppearance(named: $0) }
+        let chosen = names[theme] == nil ? "auto" : theme
+        for (name, item) in themeItems { item.state = name == chosen ? .on : .off }
+    }
+
+    @objc func showAbout(_ sender: Any?) {
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: bundleVersion, .version: ""])
+    }
+
     @objc func command(_ sender: NSMenuItem) {
         guard pageReady, let name = sender.representedObject as? String else { return }
         web.evaluateJavaScript("window.guiCommand(\(jsString(name)))")
@@ -806,7 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
 
         let app = menu(appName)
-        add(app, "About \(appName)", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(app, "About \(appName)", #selector(showAbout(_:)), target: self)
         app.addItem(.separator())
         gui(app, "Updates & Settings…", "settings", ",")
         app.addItem(.separator())
@@ -842,6 +889,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         gui(run, "Stop", "stop", ".")
 
         let view = menu("View")
+        let appearance = NSMenu(title: "Appearance")
+        let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        appearanceItem.submenu = appearance
+        view.addItem(appearanceItem)
+        for (theme, title, command) in [("auto", "Match the System", "themeAuto"),
+                                        ("light", "Light", "themeLight"), ("dark", "Dark", "themeDark")] {
+            gui(appearance, title, command)
+            themeItems[theme] = appearance.items.last
+        }
+        view.addItem(.separator())
         add(view, "Reload Interface", #selector(reload(_:)), "r", target: self)
         add(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
 

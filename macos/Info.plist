@@ -8,8 +8,9 @@
     <key>CFBundleExecutable</key><string>PySME</string>
     <key>CFBundleIconFile</key><string>PySME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>@VERSION@</string>
-    <key>CFBundleVersion</key><string>@VERSION@</string>
+    <key>CFBundleShortVersionString</key><string>@SHORT_VERSION@</string>
+    <key>CFBundleVersion</key><string>@SHORT_VERSION@</string>
+    <key>PySMEVersion</key><string>@VERSION@</string>
     <key>PySMEBuild</key><string>@BUILD@</string>
     <key>PySMEFeedbackEmail</key><string>@FEEDBACK_EMAIL@</string>
     <key>PySMEIssueRepo</key><string>@ISSUE_REPO@</string>

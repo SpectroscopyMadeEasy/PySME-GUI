@@ -535,7 +535,7 @@ function renderPlot() {
   plotKey = spectrum.segments.map((s) => `${s.wave[0]}-${s.wave[s.wave.length - 1]}`).join("|") + ($("#show-resid").checked ? "r" : "");
   const { traces, layout } = buildPlot();
   const isNew = !graph._pysmeReady;
-  Plotly.react(graph, traces, layout, {
+  return Plotly.react(graph, traces, layout, {
     responsive: true, displaylogo: false, scrollZoom: true,
     modeBarButtonsToRemove: ["toImage", "select2d", "lasso2d"],
   }).then(() => {
@@ -976,7 +976,9 @@ async function showSettings(info) {
     h("h3", {}, "Interface"),
     h("p", {}, `PySME-GUI ${info.gui}`, newGui ? h("b", {}, `  → ${latest.gui} available`) : latest && latest.gui ? "  (up to date)" : ""),
     gui,
+    channelRow(info, busy, run),
     h("p", { class: "hint" }, "Updating the interface never changes your PySME version."),
+    latest && latest.gui_note ? h("p", { class: "hint" }, latest.gui_note) : "",
     newGui && latest.gui_blocked ? h("p", { style: "color:var(--err)" }, latest.gui_blocked) : "",
     latest && latest.errors.length ? h("p", { class: "hint" }, "Could not check: " + latest.errors.join("; ")) : "",
     latest ? h("p", { class: "hint" }, `Last checked ${latest.checked}. Source: ${info.source}`) : "");
@@ -1035,6 +1037,17 @@ async function showSettings(info) {
       await refresh();
     }, 1500);
   }
+}
+
+/* Which releases of the interface are offered. Alpha builds are for internal
+   testing: the choice appears only for someone who already receives them. */
+function channelRow(info, busy, run) {
+  const names = { stable: "released versions only", beta: "beta versions too", alpha: "everything, including alpha (internal testing)" };
+  const offered = info.channel === "alpha" ? ["stable", "beta", "alpha"] : ["stable", "beta"];
+  const select = h("select", { "aria-label": "Interface updates to receive", disabled: busy, onchange: () => run("update/channel", { channel: select.value }) },
+    offered.map((name) => h("option", { value: name }, names[name])));
+  select.value = info.channel;
+  return h("label", { class: "row" }, "Receive ", select);
 }
 
 function versionRow(env, info, busy, run) {
@@ -1254,7 +1267,23 @@ const commands = {
   async exportPng() {
     const graph = $("#plot");
     if (!spectrum.segments.length) return toast("There is no plot yet.", "error");
-    const url = await Plotly.toImage(graph, { format: "png", width: graph.clientWidth, height: graph.clientHeight, scale: 2 });
+    // Figures for papers and slides are exported in light colours.
+    const theme = currentTheme();
+    const recolour = darkNow();
+    let url;
+    try {
+      if (recolour) {
+        setThemeAttribute("light");
+        await renderPlot();
+        await updateLineLabels();
+      }
+      url = await Plotly.toImage(graph, { format: "png", width: graph.clientWidth, height: graph.clientHeight, scale: 2 });
+    } finally {
+      if (recolour) {
+        setThemeAttribute(theme);
+        renderPlot();
+      }
+    }
     if (NATIVE) toNative({ type: "savePng", data: url.split(",")[1], name: "spectrum.png" });
     else h("a", { href: url, download: "spectrum.png" }).click();
   },
@@ -1264,6 +1293,9 @@ const commands = {
   stop() { send("cancel"); },
   settings() { showSettings().catch((e) => toast(e.message, "error")); },
   report() { showReport(); },
+  themeAuto() { applyTheme("auto"); },
+  themeLight() { applyTheme("light"); },
+  themeDark() { applyTheme("dark"); },
 };
 
 function resetView() {
@@ -1289,14 +1321,30 @@ window.hasUnsavedChanges = () => Boolean(S && S.dirty);
 
 /* ------------------------------------------------------------------- wiring */
 
-const THEMES = ["auto", "light", "dark"];
-function applyTheme(theme) {
+/* The choice is stored by the server: the Mac app serves the page from a new
+   port on every start, so the browser's own storage would be forgotten. */
+const THEME_LABELS = { auto: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
+const currentTheme = () => document.documentElement.dataset.theme || "auto";
+
+function setThemeAttribute(theme) {
   if (theme === "auto") delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
-  $("#btn-theme").textContent = { auto: "Auto", light: "Light", dark: "Dark" }[theme];
-  localStorageSet("pysme-theme", theme);
+}
+
+function applyTheme(theme, remember = true) {
+  setThemeAttribute(theme);
+  $("#btn-theme").textContent = THEME_LABELS[theme];
+  for (const choice of $$("[data-theme-choice]")) {
+    choice.setAttribute("role", "menuitemradio");
+    choice.setAttribute("aria-checked", String(choice.dataset.themeChoice === theme));
+  }
+  // The window frame, file panels and alerts of the Mac app follow along.
+  if (NATIVE) toNative({ type: "theme", value: theme });
+  if (remember) request("settings/theme", { theme }).catch((error) => toast(error.message, "error"));
   if (S) renderPlot();
 }
+
+const darkNow = () => currentTheme() === "dark" || (currentTheme() === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
 
 function wire() {
   document.addEventListener("click", (event) => {
@@ -1305,8 +1353,10 @@ function wire() {
       commitEdits();
       commands[button.dataset.cmd]();
     }
-    const menu = $("#menu-more");
-    menu.hidden = event.target.closest("#btn-more") ? !menu.hidden : true;
+    for (const [button, items] of [["#btn-more", "#menu-more"], ["#btn-theme", "#menu-theme"]]) {
+      const menu = $(items);
+      menu.hidden = event.target.closest(button) ? !menu.hidden : true;
+    }
   });
 
   for (const input of $$("[data-param]")) {
@@ -1418,10 +1468,9 @@ function wire() {
     if (path && (await send("export/citation", { path, format }))) toast("References written.");
   });
 
-  $("#btn-theme").addEventListener("click", () => {
-    const current = localStorageGet("pysme-theme") || "auto";
-    applyTheme(THEMES[(THEMES.indexOf(current) + 1) % THEMES.length]);
-  });
+  for (const choice of $$("[data-theme-choice]")) {
+    choice.addEventListener("click", () => applyTheme(choice.dataset.themeChoice));
+  }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => S && renderPlot());
 
   if (!NATIVE) {
@@ -1454,7 +1503,8 @@ function resizePlot() {
 }
 
 async function start() {
-  applyTheme(localStorageGet("pysme-theme") || "auto");
+  // The server already wrote the stored choice into the page.
+  applyTheme(currentTheme(), false);
   wire();
   await refresh();
   try {
