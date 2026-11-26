@@ -49,10 +49,11 @@ cat > "$BIN/pysme-gui" <<LAUNCHER
 export PYSME_GUI_HOME="$DATA" PYSME_GUI_UV="$UV"
 export UV_PYTHON_INSTALL_DIR="$DATA/python" UV_CACHE_DIR="$DATA/cache"
 value() { [ -f "\$2" ] && sed -n "s/.*\"\$1\": *\"\([^\"]*\)\".*/\1/p" "\$2" | head -n 1; }
-slot=\$(value current "$DATA/current.json")
+gui=\$(sed -n 's/^gui=//p' "$DATA/current.sh")
+env=\$(sed -n 's/^env=//p' "$DATA/current.sh")
 python=\$(value python "$DATA/settings.json" || true)
-[ -n "\$python" ] || python="$DATA/slots/\$slot/venv/bin/python"
-PYTHONPATH="$DATA/slots/\$slot/app" exec "\$python" -m pysme_gui "\$@"
+[ -n "\$python" ] || python="$DATA/envs/\$env/venv/bin/python"
+PYTHONPATH="$DATA/gui/\$gui" exec "\$python" -m pysme_gui "\$@"
 LAUNCHER
 chmod +x "$BIN/pysme-gui"
 

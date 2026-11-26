@@ -33,16 +33,22 @@ func render(_ pixels: Int) -> Data {
     // Recolour the black emblem in the interface's accent orange.
     let box = size * 0.58
     let ratio = CGFloat(emblem.width) / CGFloat(emblem.height)
-    let target = CGRect(x: (size - box * ratio) / 2, y: (size - box) / 2, width: box * ratio, height: box)
+    // Whole pixels: half-covered edge pixels would leave a faint coloured frame.
+    let target = CGRect(x: (size - box * ratio) / 2, y: (size - box) / 2, width: box * ratio, height: box).integral
+    // Colour it on white first, then multiply onto the tile, so that the white
+    // around the emblem leaves no visible box.
     context.saveGState()
+    context.setBlendMode(.multiply)
+    context.beginTransparencyLayer(in: target, auxiliaryInfo: nil)
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.fill(target)
     context.setBlendMode(.multiply)
     context.interpolationQuality = .high
     context.draw(emblem, in: target)
-    context.restoreGState()
-    context.saveGState()
     context.setBlendMode(.screen)
     context.setFillColor(CGColor(red: 0.80, green: 0.31, blue: 0.11, alpha: 1))
     context.fill(target)
+    context.endTransparencyLayer()
     context.restoreGState()
 
     let rep = NSBitmapImageRep(cgImage: context.makeImage()!)

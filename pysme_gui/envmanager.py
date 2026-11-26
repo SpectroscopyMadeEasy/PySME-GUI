@@ -1,23 +1,34 @@
-"""Create, update and roll back the app's private Python environment.
+"""Manage the app's private Python environments and copies of the interface.
 
 Only the standard library is used: this file runs before PySME is installed.
 
-Layout under the app home directory::
+The interface and PySME are versioned separately. Layout under the app home::
 
-    slots/<id>/venv/       Python environment with PySME
-    slots/<id>/app/        copy of the GUI code that belongs to it
-    current.json           which slot is active, and the one before it
+    gui/<id>/pysme_gui/    a copy of the interface code
+    envs/<id>/venv/        a Python environment with one PySME version
+    envs/<id>/env.json     its versions; written last, so it marks "complete"
+    envs/<id>/lock.txt     the exact version of every package in it
+    current.json           which interface and environment are in use
+    current.sh             the same two names, for the Linux launcher
     python/, cache/        interpreters and wheels managed by uv
     settings.json          user settings
 
-An install or update always builds a new slot, checks that PySME can be
-imported from it, and only then switches over. A failed update therefore leaves
-the working installation untouched.
+PySME environments are only removed when the user asks (or replaced by a
+repair). Whatever is built is first checked to start, and only then used, so a
+failed step leaves the working installation untouched.
+
+``current.json``::
+
+    {"current": {"gui": id, "env": id},
+     "previous": {"gui": id, "env": id} or null,   before the latest change
+     "previous_gui": id or null,                   for going back one interface
+     "bundle_id": ..., "notice": ...}
 """
 
 import argparse
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -30,7 +41,8 @@ import uuid
 import zipfile
 
 PYTHON_VERSION = "3.12"
-PYPI_URL = "https://pypi.org/pypi/pysme-astro/json"
+PACKAGE = "pysme-astro"
+PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 SOURCE_ENV = "PYSME_GUI_UPDATE_SOURCE"
 
 
@@ -51,16 +63,16 @@ def _read_json(path, default):
         return default
 
 
-def _write_json(path, data):
+def _write_text(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temp = path + ".tmp"
     with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
+        handle.write(text)
     os.replace(temp, path)
 
 
-def current_record():
-    return _read_json(os.path.join(app_home(), "current.json"), {})
+def _write_json(path, data):
+    _write_text(path, json.dumps(data, indent=2))
 
 
 def settings():
@@ -71,18 +83,192 @@ def write_settings(data):
     _write_json(os.path.join(app_home(), "settings.json"), data)
 
 
-def slot_dir(slot_id):
-    return os.path.join(app_home(), "slots", slot_id)
+def _new_id():
+    return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
 
 
-def slot_info(slot_id):
-    if not slot_id:
+def _is_running_from(directory):
+    return os.path.realpath(sys.prefix).startswith(os.path.realpath(directory) + os.sep)
+
+
+# ------------------------------------------------------------------- versions
+
+
+def version_key(text):
+    """Order release strings such as 1.2.0, 1.3.0rc1 and 1.3.0.dev4."""
+    match = re.match(r"\s*v?(\d+(?:\.\d+)*)(.*)", str(text or ""))
+    if not match:
+        return ((0,), 0, 0)
+    release = [int(p) for p in match.group(1).split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    suffix = match.group(2).split("+")[0].lstrip(".-_").lower()
+    rank = 4
+    for prefix, value in (("dev", 0), ("a", 1), ("b", 2), ("rc", 3), ("post", 5)):
+        if suffix.startswith(prefix):
+            rank = value
+            break
+    number = re.search(r"\d+", suffix)
+    return (tuple(release), rank, int(number.group()) if number else 0)
+
+
+def is_prerelease(text):
+    return version_key(text)[1] < 4
+
+
+def _constant(text, name):
+    match = re.search(rf'^{name}\s*=\s*"([^"]*)"', text, re.M)
+    return match.group(1) if match else None
+
+
+def read_constants(init_text):
+    """What an interface release says about itself and the PySME it works with."""
+    return {
+        name: _constant(init_text, key)
+        for name, key in (
+            ("version", "__version__"),
+            ("recommended", "PYSME_RECOMMENDED"),
+            ("minimum", "PYSME_MINIMUM"),
+            ("below", "PYSME_BELOW"),
+            ("repo", "UPDATE_REPO"),
+            ("ref", "UPDATE_REF"),
+        )
+    }
+
+
+def package_constants(package_dir):
+    with open(os.path.join(package_dir, "__init__.py"), encoding="utf-8") as handle:
+        return read_constants(handle.read())
+
+
+def read_gui_version(text):
+    return read_constants(text)["version"]
+
+
+def supports(constants, pysme_version):
+    """True if an interface with these constants accepts this PySME version."""
+    key = version_key(pysme_version)
+    if constants.get("minimum") and key < version_key(constants["minimum"]):
+        return False
+    # Compare release numbers only, so that 2.0.0rc1 does not count as "below 2".
+    return not constants.get("below") or key[0] < version_key(constants["below"])[0]
+
+
+def supported_text(constants):
+    return f"{constants.get('minimum')} or newer, below {constants.get('below')}"
+
+
+# --------------------------------------------------- what is installed and used
+
+
+def gui_dir(gui_id):
+    return os.path.join(app_home(), "gui", gui_id)
+
+
+def gui_package(gui_id):
+    return os.path.join(gui_dir(gui_id), "pysme_gui")
+
+
+def gui_info(gui_id):
+    if not gui_id:
         return None
-    return _read_json(os.path.join(slot_dir(slot_id), "slot.json"), None)
+    return _read_json(os.path.join(gui_dir(gui_id), "gui.json"), None)
 
 
-def venv_python(slot_id):
-    return os.path.join(slot_dir(slot_id), "venv", "bin", "python")
+def env_dir(env_id):
+    return os.path.join(app_home(), "envs", env_id)
+
+
+def env_python(env_id):
+    return os.path.join(env_dir(env_id), "venv", "bin", "python")
+
+
+def env_info(env_id):
+    """Facts about a complete, usable environment, or None."""
+    if not env_id:
+        return None
+    info = _read_json(os.path.join(env_dir(env_id), "env.json"), None)
+    if not info or not os.path.exists(env_python(env_id)):
+        return None
+    return dict(info, id=env_id, python=env_python(env_id))
+
+
+def installed_envs():
+    try:
+        names = os.listdir(os.path.join(app_home(), "envs"))
+    except OSError:
+        return []
+    found = [info for info in map(env_info, names) if info]
+    return sorted(found, key=lambda i: (version_key(i["pysme_version"]), i["created"]), reverse=True)
+
+
+def current_record():
+    record = _read_json(os.path.join(app_home(), "current.json"), {})
+    return record if isinstance(record, dict) else {}
+
+
+def selection(record=None):
+    """The (interface id, environment id) in use; either may be None."""
+    chosen = (current_record() if record is None else record).get("current")
+    if not isinstance(chosen, dict):
+        return None, None
+    return chosen.get("gui"), chosen.get("env")
+
+
+def _write_record(record):
+    _write_json(os.path.join(app_home(), "current.json"), record)
+    gui_id, env_id = selection(record)
+    _write_text(os.path.join(app_home(), "current.sh"), f"gui={gui_id}\nenv={env_id}\n")
+
+
+def activate(gui_id, env_id, bundle_id=None, notice=None, log=print):
+    """Use this interface and environment from the next start on."""
+    record = current_record()
+    old_gui, old_env = selection(record)
+    previous = record.get("previous")
+    if (old_gui, old_env) != (gui_id, env_id) and gui_info(old_gui) and env_info(old_env):
+        previous = {"gui": old_gui, "env": old_env}
+    previous_gui = record.get("previous_gui")
+    if old_gui != gui_id and gui_info(old_gui):
+        previous_gui = old_gui
+    new = {
+        "current": {"gui": gui_id, "env": env_id},
+        "previous": previous,
+        "previous_gui": previous_gui,
+        "bundle_id": bundle_id or record.get("bundle_id"),
+        "notice": notice,
+    }
+    _write_record(new)
+    _prune_gui({gui_id, previous_gui, (previous or {}).get("gui")}, log)
+
+
+def _prune_gui(keep, log):
+    """Old interface copies are tiny and replaceable, unlike environments."""
+    root = os.path.join(app_home(), "gui")
+    running = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if name in keep or running.startswith(os.path.realpath(path) + os.sep):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def remove_env(env_id, log=print):
+    record = current_record()
+    if env_id == selection(record)[1]:
+        raise RuntimeError("This PySME is the one in use. Switch to another one first.")
+    if not env_info(env_id):
+        raise RuntimeError("That PySME installation no longer exists.")
+    if _is_running_from(env_dir(env_id)):
+        raise RuntimeError("This PySME is still running. Restart first.")
+    log(f"Removing PySME {env_info(env_id)['pysme_version']}")
+    shutil.rmtree(env_dir(env_id))
+    if (record.get("previous") or {}).get("env") == env_id:
+        record["previous"] = None
+        _write_record(record)
+
+
+# ------------------------------------------------------------------- building
 
 
 def uv_environment():
@@ -124,43 +310,246 @@ def _run(command, log, env, cwd=None):
     return output
 
 
-def version_key(text):
-    """Order release strings such as 1.2.0, 1.3.0rc1 and 1.3.0.dev4."""
-    match = re.match(r"\s*v?(\d+(?:\.\d+)*)(.*)", str(text or ""))
-    if not match:
-        return ((0,), 0, 0)
-    release = [int(p) for p in match.group(1).split(".")]
-    while len(release) > 1 and release[-1] == 0:
-        release.pop()
-    suffix = match.group(2).split("+")[0].lstrip(".-_").lower()
-    rank = 4
-    for prefix, value in (("dev", 0), ("a", 1), ("b", 2), ("rc", 3), ("post", 5)):
-        if suffix.startswith(prefix):
-            rank = value
-            break
-    number = re.search(r"\d+", suffix)
-    return (tuple(release), rank, int(number.group()) if number else 0)
+def _freeze(uv, python, env):
+    result = subprocess.run(
+        [uv, "pip", "freeze", "--python", python], capture_output=True, text=True, env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not list the installed packages:\n{result.stderr.strip()}")
+    return result.stdout
 
 
-def read_gui_version(text):
-    match = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.M)
-    return match.group(1) if match else None
+_SMOKE_TEST = (
+    "import json, platform, pysme, pysme_gui, pysme_gui.server\n"
+    "from pysme.smelib import _smelib\n"
+    "print('SMOKE ' + json.dumps({'pysme': pysme.__version__, "
+    "'smelib': str(_smelib.LibraryVersion()), 'gui': pysme_gui.__version__, "
+    "'python': platform.python_version()}))\n"
+)
 
 
-def _read_update_target(init_text):
-    values = {}
-    for name in ("UPDATE_REPO", "UPDATE_REF"):
-        match = re.search(rf'^{name}\s*=\s*"([^"]+)"', init_text, re.M)
-        values[name] = match.group(1) if match else None
-    return values["UPDATE_REPO"], values["UPDATE_REF"]
+def smoke_test(gui_id, python, log):
+    """Check that this interface starts with the PySME of this Python."""
+    env = uv_environment()
+    env["PYTHONPATH"] = gui_dir(gui_id)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    output = _run([python, "-c", _SMOKE_TEST], log, env, cwd=app_home())
+    line = next(line for line in output if line.startswith("SMOKE "))
+    return json.loads(line[6:])
+
+
+def create_env(version, gui_id, lock=None, log=print):
+    """Install one PySME version into a new environment; return its id.
+
+    With ``lock`` (the text of a lock file) every package gets exactly the
+    version it had before.
+    """
+    uv = find_uv()
+    env_id = _new_id()
+    directory = env_dir(env_id)
+    os.makedirs(directory)
+    env = uv_environment()
+    python = env_python(env_id)
+    try:
+        log(f"STEP 1/3 Preparing Python {PYTHON_VERSION}")
+        _run(
+            [uv, "venv", "--python", PYTHON_VERSION, "--managed-python",
+             os.path.join(directory, "venv")],
+            log, env,
+        )
+        log("STEP 2/3 Installing PySME and its dependencies")
+        # Never compile PySME: users have no Fortran compiler.
+        command = [uv, "pip", "install", "--python", python, "--only-binary", PACKAGE]
+        if lock:
+            _write_text(os.path.join(directory, "wanted.txt"), lock)
+            command += ["-r", os.path.join(directory, "wanted.txt")]
+        else:
+            command.append(f"{PACKAGE}=={version}")
+        _run(command, log, env)
+        log("STEP 3/3 Checking that PySME runs")
+        versions = smoke_test(gui_id, python, log)
+        if version_key(versions["pysme"]) != version_key(version):
+            raise RuntimeError(f"Asked for PySME {version} but got {versions['pysme']}.")
+        _write_text(os.path.join(directory, "lock.txt"), _freeze(uv, python, env))
+        _write_json(os.path.join(directory, "env.json"), {
+            "pysme_version": versions["pysme"],
+            "smelib_version": versions["smelib"],
+            "python_version": versions["python"],
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    except BaseException:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    return env_id
+
+
+def read_lock(env_id):
+    try:
+        with open(os.path.join(env_dir(env_id), "lock.txt"), encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def export_lock(env_id, path):
+    """Write the package list that recreates an environment elsewhere."""
+    info, lock = env_info(env_id), read_lock(env_id)
+    if not info or not lock:
+        raise RuntimeError("There is no package list for this installation.")
+    header = (
+        f"# PySME {info['pysme_version']}, SMElib: {info['smelib_version']}\n"
+        f"# Exported by PySME-GUI from a Python {info['python_version']} environment "
+        f"on {platform.system()} {platform.machine()}.\n"
+        f"# Recreate it with Python {PYTHON_VERSION}:\n"
+        f"#     pip install --only-binary {PACKAGE} -r this-file.txt\n"
+        "# Builds differ between systems, so results need not agree bit for bit.\n"
+        "# Model atmospheres and NLTE grids (~/.sme) are not covered by this list.\n"
+    )
+    _write_text(os.path.abspath(os.path.expanduser(path)), header + lock)
+
+
+def add_gui(source):
+    """Copy the interface code found in ``source``; return its id."""
+    package = os.path.join(os.path.abspath(source), "pysme_gui")
+    if not os.path.isfile(os.path.join(package, "__init__.py")):
+        raise RuntimeError(f"No pysme_gui package in {source}")
+    gui_id = _new_id()
+    shutil.copytree(
+        package, gui_package(gui_id), ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
+    _write_json(os.path.join(gui_dir(gui_id), "gui.json"), package_constants(package))
+    return gui_id
+
+
+# ------------------------------------------------------------------- actions
+
+
+def setup(source, bundle_id=None, repair=False, log=print):
+    """First launch, a newer disk image, or a repair.
+
+    The interface comes from ``source``. The PySME the user chose is kept when
+    that interface supports it; otherwise, and on the first launch, the
+    recommended version is used. A repair rebuilds the chosen environment from
+    its package list.
+    """
+    gui_id = add_gui(source)
+    try:
+        constants = gui_info(gui_id)
+        chosen = env_info(selection()[1])
+        notice = replaced = None
+        if chosen and supports(constants, chosen["pysme_version"]):
+            env_id = chosen["id"]
+            if repair:
+                env_id = create_env(
+                    chosen["pysme_version"], gui_id, lock=read_lock(env_id), log=log
+                )
+                replaced = chosen["id"]
+            else:
+                log("STEP 3/3 Checking that PySME runs")
+                smoke_test(gui_id, chosen["python"], log)
+        else:
+            wanted = constants["recommended"]
+            same = [i for i in installed_envs()
+                    if version_key(i["pysme_version"]) == version_key(wanted)]
+            if same and not repair:
+                env_id = same[0]["id"]
+                log("STEP 3/3 Checking that PySME runs")
+                smoke_test(gui_id, same[0]["python"], log)
+            else:
+                env_id = create_env(wanted, gui_id, log=log)
+            if chosen:
+                notice = (
+                    f"This interface needs PySME {supported_text(constants)}, so it now uses "
+                    f"PySME {wanted}. PySME {chosen['pysme_version']} is still installed."
+                )
+    except BaseException:
+        shutil.rmtree(gui_dir(gui_id), ignore_errors=True)
+        raise
+    activate(gui_id, env_id, bundle_id=bundle_id, notice=notice, log=log)
+    if replaced and not _is_running_from(env_dir(replaced)):
+        remove_env(replaced, log=log)
+    log(f"Using PySME {env_info(env_id)['pysme_version']} with PySME-GUI {constants['version']}.")
+    return env_id
+
+
+def _current_parts():
+    gui_id, env_id = selection()
+    if not gui_info(gui_id) or not env_info(env_id):
+        raise RuntimeError("PySME-GUI is not installed in the managed location.")
+    return gui_id, env_info(env_id)
+
+
+def install_pysme(version, log=print):
+    """Add a PySME version. It is not used until the user switches to it."""
+    gui_id, _ = _current_parts()
+    constants = gui_info(gui_id)
+    if not supports(constants, version):
+        raise RuntimeError(f"This interface needs PySME {supported_text(constants)}.")
+    if any(version_key(i["pysme_version"]) == version_key(version) for i in installed_envs()):
+        raise RuntimeError(f"PySME {version} is already installed.")
+    env_id = create_env(version, gui_id, log=log)
+    log(f"Installed PySME {version}.")
+    return env_id
+
+
+def use_env(env_id, log=print):
+    gui_id, _ = _current_parts()
+    info = env_info(env_id)
+    if not info:
+        raise RuntimeError("That PySME installation no longer exists.")
+    constants = gui_info(gui_id)
+    if not supports(constants, info["pysme_version"]):
+        raise RuntimeError(f"This interface needs PySME {supported_text(constants)}.")
+    log("STEP Checking that PySME runs")
+    smoke_test(gui_id, info["python"], log)
+    activate(gui_id, env_id, log=log)
+
+
+def update_gui(log=print):
+    """Install the newest interface. The PySME in use is not changed."""
+    _, env = _current_parts()
+    with tempfile.TemporaryDirectory(prefix="pysme-gui-update-") as temp:
+        source = fetch_gui_source(temp, log)
+        constants = package_constants(os.path.join(source, "pysme_gui"))
+        if not supports(constants, env["pysme_version"]):
+            raise RuntimeError(
+                f"The new interface needs PySME {supported_text(constants)}, but you are using "
+                f"{env['pysme_version']}. Install and switch to a supported version first; "
+                "the one you use now stays installed."
+            )
+        gui_id = add_gui(source)
+    try:
+        log("STEP Checking that the new interface runs")
+        smoke_test(gui_id, env["python"], log)
+    except BaseException:
+        shutil.rmtree(gui_dir(gui_id), ignore_errors=True)
+        raise
+    activate(gui_id, env["id"], log=log)
+    return gui_id
+
+
+def rollback_gui(log=print):
+    """Go back to the interface used before; PySME is not changed."""
+    _, env = _current_parts()
+    previous = current_record().get("previous_gui")
+    info = gui_info(previous)
+    if not info:
+        raise RuntimeError("There is no earlier interface to go back to.")
+    if not supports(info, env["pysme_version"]):
+        raise RuntimeError(f"The earlier interface needs PySME {supported_text(info)}.")
+    log("STEP Checking that the earlier interface runs")
+    smoke_test(previous, env["python"], log)
+    activate(previous, env["id"], log=log)
+
+
+# ------------------------------------------------------------------- online
 
 
 def update_target():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__init__.py")
-    with open(path, encoding="utf-8") as handle:
-        repo, ref = _read_update_target(handle.read())
+    constants = package_constants(os.path.dirname(os.path.abspath(__file__)))
     chosen = settings()
-    return chosen.get("update_repo") or repo, chosen.get("update_ref") or ref
+    return (chosen.get("update_repo") or constants["repo"],
+            chosen.get("update_ref") or constants["ref"])
 
 
 def _download(url, timeout=30):
@@ -169,19 +558,81 @@ def _download(url, timeout=30):
         return response.read()
 
 
-def latest_pysme_version():
-    return json.loads(_download(PYPI_URL))["info"]["version"]
+def compatible_wheel(filename, system, machine, system_version):
+    """True if this wheel installs on that system with the app's Python.
+
+    ``system`` is sys.platform; ``system_version`` is the macOS or glibc version.
+    """
+    if not filename.endswith(".whl"):
+        return False
+    parts = filename[:-4].split("-")
+    if len(parts) < 5:
+        return False
+    pythons, abis, platforms = (p.split(".") for p in parts[-3:])
+    want = "cp" + PYTHON_VERSION.replace(".", "")
+    minor = int(PYTHON_VERSION.split(".")[1])
+    stable_abi = "abi3" in abis and any(
+        re.fullmatch(r"cp3(\d+)", p) and int(p[3:]) <= minor for p in pythons
+    )
+    if not (want in pythons or "py3" in pythons or stable_abi):
+        return False
+    have = version_key(system_version)[0] if system_version else None
+    for tag in platforms:
+        if tag == "any":
+            return True
+        if system == "darwin":
+            match = re.fullmatch(r"macosx_(\d+)_(\d+)_(\w+)", tag)
+            if match and match.group(3) in (machine, "universal2"):
+                if have is None or version_key(f"{match[1]}.{match[2]}")[0] <= have:
+                    return True
+        elif system.startswith("linux"):
+            match = re.fullmatch(r"(manylinux_(\d+)_(\d+)|manylinux(\d+)|linux)_(\w+)", tag)
+            if match and match.group(5) == machine:
+                legacy = {"1": "2.5", "2010": "2.12", "2014": "2.17"}.get(match.group(4))
+                needs = f"{match[2]}.{match[3]}" if match.group(2) else legacy
+                if have is None or needs is None or version_key(needs)[0] <= have:
+                    return True
+        elif system == "win32":
+            if tag == {"amd64": "win_amd64", "arm64": "win_arm64"}.get(machine.lower()):
+                return True
+    return False
 
 
-def latest_gui_version():
+def _this_system():
+    if sys.platform == "darwin":
+        release = platform.mac_ver()[0]
+    else:
+        release = platform.libc_ver()[1]
+    return sys.platform, platform.machine(), release
+
+
+def parse_releases(data, system=None):
+    """Releases in PyPI's JSON that can be installed here, newest first."""
+    system = system or _this_system()
+    found = []
+    for version, files in data.get("releases", {}).items():
+        if any(not f.get("yanked") and compatible_wheel(f["filename"], *system) for f in files):
+            found.append({
+                "version": version,
+                "prerelease": is_prerelease(version),
+                "date": min(f.get("upload_time", "") for f in files)[:10],
+            })
+    return sorted(found, key=lambda r: version_key(r["version"]), reverse=True)
+
+
+def available_pysme():
+    return parse_releases(json.loads(_download(PYPI_URL, timeout=40)))
+
+
+def latest_gui():
+    """Constants of the newest published interface."""
     local = os.environ.get(SOURCE_ENV)
     if local:
-        with open(os.path.join(local, "pysme_gui", "__init__.py"), encoding="utf-8") as handle:
-            return read_gui_version(handle.read())
+        return package_constants(os.path.join(local, "pysme_gui"))
     repo, ref = update_target()
     url = f"https://raw.githubusercontent.com/{repo}/{ref}/pysme_gui/__init__.py"
     try:
-        return read_gui_version(_download(url).decode("utf-8"))
+        return read_constants(_download(url).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise RuntimeError(f"nothing published yet at {repo}, branch '{ref}'") from exc
@@ -214,129 +665,20 @@ def fetch_gui_source(directory, log=print):
     raise RuntimeError(f"No pysme_gui package found in {repo}@{ref}.")
 
 
-_SMOKE_TEST = (
-    "import json, pysme, pysme_gui, pysme_gui.server\n"
-    "from pysme.smelib import _smelib\n"
-    "print('SMOKE ' + json.dumps({'pysme': pysme.__version__, "
-    "'smelib': str(_smelib.LibraryVersion()), 'gui': pysme_gui.__version__}))\n"
-)
-
-
-def install(source, pysme_requirement=None, bundle_id=None, log=print):
-    """Build a new slot from the GUI code in ``source`` and make it current."""
-    source = os.path.abspath(source)
-    package = os.path.join(source, "pysme_gui")
-    if not os.path.isfile(os.path.join(package, "__init__.py")):
-        raise RuntimeError(f"No pysme_gui package in {source}")
-    uv = find_uv()
-    home = app_home()
-    slot_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-    directory = slot_dir(slot_id)
-    os.makedirs(directory)
-    env = uv_environment()
-    try:
-        app = os.path.join(directory, "app")
-        shutil.copytree(
-            package, os.path.join(app, "pysme_gui"),
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-        log(f"STEP 1/3 Preparing Python {PYTHON_VERSION}")
-        _run(
-            [uv, "venv", "--python", PYTHON_VERSION, "--managed-python",
-             os.path.join(directory, "venv")],
-            log, env,
-        )
-        log("STEP 2/3 Installing PySME and its dependencies")
-        command = [
-            uv, "pip", "install", "--python", venv_python(slot_id),
-            "-r", os.path.join(app, "pysme_gui", "requirements.txt"),
-        ]
-        if pysme_requirement:
-            command.append(pysme_requirement)
-        _run(command, log, env)
-        log("STEP 3/3 Checking that PySME runs")
-        test_env = dict(env)
-        test_env["PYTHONPATH"] = app
-        output = _run([venv_python(slot_id), "-c", _SMOKE_TEST], log, test_env, cwd=directory)
-        smoke = next(line for line in output if line.startswith("SMOKE "))
-        versions = json.loads(smoke[6:])
-        _write_json(os.path.join(directory, "slot.json"), {
-            "gui_version": versions["gui"],
-            "pysme_version": versions["pysme"],
-            "smelib_version": versions["smelib"],
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        })
-    except BaseException:
-        shutil.rmtree(directory, ignore_errors=True)
-        raise
-
-    record = current_record()
-    previous = record.get("current")
-    new_record = {
-        "current": slot_id,
-        "previous": previous if slot_info(previous) else None,
-        "bundle_id": bundle_id or record.get("bundle_id"),
-    }
-    _write_json(os.path.join(home, "current.json"), new_record)
-    _prune({new_record["current"], new_record["previous"]}, log)
-    log(f"Installed PySME {versions['pysme']} with PySME-GUI {versions['gui']}.")
-    return slot_id
-
-
-def _prune(keep, log):
-    root = os.path.join(app_home(), "slots")
-    running = os.path.realpath(sys.prefix)
-    for name in os.listdir(root):
-        path = os.path.join(root, name)
-        if name in keep or running.startswith(os.path.realpath(path) + os.sep):
-            continue
-        log(f"Removing old environment {name}")
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def rollback():
-    record = current_record()
-    previous = record.get("previous")
-    if not slot_info(previous) or not os.path.exists(venv_python(previous)):
-        raise RuntimeError("There is no earlier version to go back to.")
-    record["current"], record["previous"] = previous, record.get("current")
-    _write_json(os.path.join(app_home(), "current.json"), record)
-    return previous
-
-
-def update(update_pysme=None, update_gui=False, log=print):
-    """Build and activate a new slot with a newer PySME and/or GUI."""
-    record = current_record()
-    info = slot_info(record.get("current"))
-    if info is None:
-        raise RuntimeError("PySME-GUI is not installed in the managed location.")
-    with tempfile.TemporaryDirectory(prefix="pysme-gui-update-") as temp:
-        if update_gui:
-            source = fetch_gui_source(temp, log)
-        else:
-            source = os.path.join(slot_dir(record["current"]), "app")
-        version = update_pysme or info["pysme_version"]
-        return install(source, pysme_requirement=f"pysme-astro=={version}", log=log)
-
-
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Manage the PySME-GUI environment")
+    parser = argparse.ArgumentParser(description="Set up the PySME-GUI environment")
     commands = parser.add_subparsers(dest="command", required=True)
     install_parser = commands.add_parser("install")
     install_parser.add_argument("--source", required=True)
-    install_parser.add_argument("--pysme", help="requirement, e.g. pysme-astro==1.2.0")
     install_parser.add_argument("--bundle-id")
-    commands.add_parser("rollback")
+    install_parser.add_argument("--repair", action="store_true")
     args = parser.parse_args(argv)
 
     def log(text):
         print(text, flush=True)
 
     try:
-        if args.command == "install":
-            install(args.source, args.pysme, args.bundle_id, log=log)
-        else:
-            log(f"Now using {rollback()}")
+        setup(args.source, bundle_id=args.bundle_id, repair=args.repair, log=log)
     except Exception as exc:
         log(f"ERROR {exc}")
         return 1

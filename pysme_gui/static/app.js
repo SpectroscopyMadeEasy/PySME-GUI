@@ -52,9 +52,21 @@ async function request(path, body) {
   return data;
 }
 
-function toast(message, kind = "info") {
+/* Kept for problem reports. */
+const recentErrors = [];
+function rememberError(message) {
+  recentErrors.push(`${new Date().toLocaleTimeString()}  ${message}`);
+  if (recentErrors.length > 20) recentErrors.shift();
+}
+window.addEventListener("error", (e) => rememberError(`${e.message} (${e.filename}:${e.lineno})`));
+window.addEventListener("unhandledrejection", (e) => rememberError(String(e.reason?.stack || e.reason)));
+
+function toast(message, kind = "info", reportable = false) {
+  if (kind === "error") rememberError(message);
   const close = h("button", { title: "Dismiss", onclick: () => node.remove() }, "✕");
-  const node = h("div", { class: "toast " + kind }, h("div", {}, message), close);
+  const text = h("div", {}, message);
+  if (reportable) text.append(h("div", {}, h("button", { class: "link", onclick: () => { node.remove(); showReport(); } }, "Report this problem…")));
+  const node = h("div", { class: "toast " + kind }, text, close);
   $("#toasts").append(node);
   while ($("#toasts").children.length > 4) $("#toasts").firstChild.remove();
   if (kind !== "error") setTimeout(() => node.remove(), 6000);
@@ -70,7 +82,7 @@ let seenRevision = -1;
 let logSeq = 0;
 let pollTimer = null;
 let lastJobKey = "";
-const ui = { tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null };
+const ui = { prereleases: false, installChoice: null, tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null };
 
 /* All changes are sent one after another, so that "type a value, then press
    Synthesize" always reaches PySME in that order. */
@@ -160,7 +172,7 @@ function renderTop() {
   const name = S.path ? S.path.split("/").pop() : "Untitled";
   document.title = `${name}${S.dirty ? " •" : ""} — PySME`;
   const latest = S.update.latest;
-  $("#update-dot").hidden = !(latest && (latest.pysme_newer || latest.gui_newer));
+  $("#update-dot").hidden = !(latest && (latest.pysme_new || latest.gui_newer));
 }
 
 function renderJob() {
@@ -188,7 +200,7 @@ function renderJob() {
   }
   const key = `${job.id}:${job.state}`;
   if (key !== lastJobKey) {
-    if (job.state === "failed") toast(`${job.error}`, "error");
+    if (job.state === "failed") toast(`${job.error}`, "error", true);
     if (job.state === "done") showDrawer(job.kind === "fit" ? "results" : ui.drawer);
     lastJobKey = key;
   }
@@ -804,18 +816,31 @@ async function renderCitations() {
 
 function openDialog(title, body, buttons = [], onClose) {
   const dialog = $("#dialog");
-  if (dialog.open) dialog.close();
+  if (dialog.open) {
+    const done = dialog._done;
+    dialog._done = null;
+    dialog.close();
+    if (done) done();
+  }
   dialog.replaceChildren(
     h("div", { class: "dialog-head" }, h("h2", {}, title), h("button", { class: "ghost", title: "Close", onclick: () => dialog.close() }, "✕")),
     h("div", { class: "dialog-body" }, body),
     buttons.length ? h("div", { class: "dialog-foot" }, buttons) : "");
-  dialog.onclose = onClose || null;
+  dialog._done = onClose || null;
+  // The "close" event arrives late. When one dialog replaces another, the old
+  // dialog's event must not answer the new one.
+  dialog.onclose = () => {
+    if (dialog.open) return;
+    const done = dialog._done;
+    dialog._done = null;
+    if (done) done();
+  };
   dialog.showModal();
   return dialog;
 }
 
 function showMessage(title, text) {
-  openDialog(title, h("pre", {}, text), [h("button", { onclick: () => { $("#dialog").close(); showDrawer("log"); } }, "Open log"), h("button", { class: "secondary", onclick: () => $("#dialog").close() }, "Close")]);
+  openDialog(title, h("pre", {}, text), [h("button", { onclick: () => showReport() }, "Report a problem…"), h("button", { onclick: () => { $("#dialog").close(); showDrawer("log"); } }, "Open log"), h("button", { class: "secondary", onclick: () => $("#dialog").close() }, "Close")]);
 }
 
 function confirmDialog(title, text, yes) {
@@ -906,57 +931,70 @@ function localStorageSet(key, value) {
 /* ------------------------------------------------------- settings & updates */
 
 let settingsTimer = null;
+let settingsScroll = 0;
+
+const shortSmelib = (text) => /ref: (v[\w.]+)/.exec(text || "")?.[1] || text;
 
 async function showSettings(info) {
   info = info || (await request("settings"));
   const latest = info.latest;
   const task = info.task;
-  const versionLine = (label, current, newest, isNewer) => [
-    h("span", {}, label),
-    h("span", {}, current, latest && newest ? (isNewer ? h("b", {}, `  → ${newest} available`) : "  (up to date)") : ""),
-  ];
-  const body = h("div", {},
-    h("h3", {}, "Versions"),
-    h("div", { class: "kv" },
-      versionLine("PySME", info.pysme, latest?.pysme, latest?.pysme_newer),
-      versionLine("PySME-GUI", info.gui, latest?.gui, latest?.gui_newer),
-      h("span", {}, "SMElib"), h("span", {}, info.smelib),
-      h("span", {}, "Python"), h("span", {}, `${info.python_version} — ${info.python}`),
-      h("span", {}, "Update source"), h("span", {}, `pypi.org/project/pysme-astro; ${info.source}`),
-      h("span", {}, "App data"), h("span", {}, info.home),
-      h("span", {}, "Model data"), h("span", {}, "~/.sme (shared with other PySME installations)")),
-    latest && latest.errors.length ? h("p", { class: "hint" }, "Could not check: " + latest.errors.join("; ")) : "",
-    latest ? h("p", { class: "hint" }, `Last checked ${latest.checked}.`) : "");
+  const busy = task.state === "running";
+  const body = h("div", {});
 
-  const buttons = h("div", { class: "row" });
   const run = async (path, payload) => {
     try {
       await showSettings(await request(path, payload));
       await refresh();
     } catch (error) {
       toast(error.message, "error");
+      await showSettings();
     }
   };
-  const busy = task.state === "running";
-  buttons.append(h("button", { disabled: busy, onclick: (e) => { e.target.textContent = "Checking…"; run("update/check", {}); } }, "Check for updates"));
+
+  if (info.notice) body.append(h("div", { class: "card" }, info.notice));
+  if (busy) body.append(h("div", { class: "card" }, h("span", { class: "spinner" }), `${task.title}: ${task.step}. You can keep working.`));
+  if (task.state === "done") body.append(h("div", { class: "card" }, task.message));
+  if (task.state === "failed") body.append(h("p", { style: "color:var(--err);white-space:pre-wrap" }, `${task.title} failed. Nothing was changed.\n${task.error}`));
+  if (info.restart) {
+    body.append(h("div", { class: "card" }, h("b", {}, "Restart to apply the change. "),
+      NATIVE ? h("button", { class: "secondary", onclick: restartApp }, "Restart now") : h("span", {}, "Quit this process and start PySME-GUI again.")));
+  }
+
+  /* the interface */
+  const newGui = latest && latest.gui_newer;
+  const gui = h("div", { class: "row" },
+    h("button", { disabled: busy, onclick: (e) => { e.target.textContent = "Checking…"; run("update/check", {}); } }, "Check for updates"));
   if (info.managed) {
-    const available = latest && (latest.pysme_newer || latest.gui_newer);
-    buttons.append(h("button", { class: "primary", disabled: busy || !available, onclick: () => run("update/apply", { pysme: true, gui: true }) }, "Update now"));
-    if (info.previous) {
-      buttons.append(h("button", {
-        disabled: busy,
-        title: `PySME ${info.previous.pysme_version}, GUI ${info.previous.gui_version}, installed ${info.previous.created}`,
-        onclick: () => run("update/rollback", {}),
-      }, "Go back to previous version"));
+    gui.append(h("button", { class: "primary", disabled: busy || !newGui || Boolean(latest.gui_blocked), onclick: () => run("update/gui", {}) }, "Update interface"));
+    if (info.previous_gui) {
+      gui.append(h("button", { disabled: busy, onclick: () => run("update/rollback", {}) }, `Back to previous interface (${info.previous_gui})`));
     }
   }
-  body.append(buttons);
-  if (!info.managed) body.append(h("p", { class: "hint" }, "One-click update is available when PySME-GUI runs in its own installed environment. This session uses another Python."));
-  if (busy) body.append(h("p", {}, h("span", { class: "spinner" }), `${task.step}. A new environment is being built; the current one stays usable.`));
-  if (task.state === "failed") body.append(h("p", { style: "color:var(--err);white-space:pre-wrap" }, `Update failed, nothing was changed.\n${task.error}`));
-  if (task.state === "restart") {
-    body.append(h("div", { class: "card" }, h("b", {}, "Ready. Restart to use the new version."),
-      NATIVE ? h("button", { class: "secondary", onclick: restartApp }, "Restart now") : h("span", {}, "Quit this process and start PySME-GUI again.")));
+  gui.append(h("button", { onclick: () => showReport() }, "Report a problem…"));
+  body.append(
+    h("h3", {}, "Interface"),
+    h("p", {}, `PySME-GUI ${info.gui}`, newGui ? h("b", {}, `  → ${latest.gui} available`) : latest && latest.gui ? "  (up to date)" : ""),
+    gui,
+    h("p", { class: "hint" }, "Updating the interface never changes your PySME version."),
+    newGui && latest.gui_blocked ? h("p", { style: "color:var(--err)" }, latest.gui_blocked) : "",
+    latest && latest.errors.length ? h("p", { class: "hint" }, "Could not check: " + latest.errors.join("; ")) : "",
+    latest ? h("p", { class: "hint" }, `Last checked ${latest.checked}. Source: ${info.source}`) : "");
+
+  /* PySME */
+  body.append(h("h3", {}, "PySME"));
+  if (info.managed) {
+    body.append(h("ul", { class: "versions" }, info.environments.map((env) => versionRow(env, info, busy, run))));
+    body.append(installRow(info, busy, run));
+    const selected = info.environments.find((e) => e.selected);
+    if (selected) {
+      body.append(h("p", { class: "hint" }, "Python for your own scripts, with exactly the selected PySME installation: ",
+        h("span", { class: "selectable" }, selected.python), " ",
+        h("button", { class: "link", onclick: () => copyText(selected.python) }, "Copy")));
+    }
+  } else {
+    body.append(h("p", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
+      h("p", { class: "hint" }, "Versions can be managed when PySME-GUI runs in its own installed environment. This session uses another Python."));
   }
 
   const python = h("input", { type: "text", value: info.custom_python || "", placeholder: "empty = the app's own environment", "aria-label": "Custom Python", style: "flex:1" });
@@ -976,21 +1014,195 @@ async function showSettings(info) {
             e.target.textContent = "Save";
           }
         },
-      }, "Save")));
+      }, "Save")),
+    h("h3", {}, "Details"),
+    h("div", { class: "kv" },
+      h("span", {}, "Running"), h("span", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
+      h("span", {}, "Python"), h("span", {}, `${info.python_version} — ${info.python}`),
+      h("span", {}, "App data"), h("span", {}, info.home),
+      h("span", {}, "Model data"), h("span", {}, "~/.sme (shared by all PySME versions)")));
 
-  openDialog("Updates & settings", body, [h("button", { onclick: () => $("#dialog").close() }, "Close")], () => clearTimeout(settingsTimer));
+  const previous = $("#dialog .dialog-body");
+  if (previous && $("#dialog .settings-body")) settingsScroll = previous.scrollTop;
+  body.className = "settings-body";
+  openDialog("Updates & settings", body, [h("button", { onclick: () => $("#dialog").close() }, "Close")],
+    () => { clearTimeout(settingsTimer); });
+  $("#dialog .dialog-body").scrollTop = settingsScroll;
   clearTimeout(settingsTimer);
   if (busy) {
     settingsTimer = setTimeout(async () => {
-      if ($("#dialog").open) await showSettings();
+      await showSettings();
       await refresh();
     }, 1500);
   }
 }
 
+function versionRow(env, info, busy, run) {
+  const tags = [];
+  if (env.running) tags.push(h("span", { class: "tag on" }, "in use"));
+  if (env.selected && !env.running) tags.push(h("span", { class: "tag" }, "after restart"));
+  if (env.pysme_version === info.recommended) tags.push(h("span", { class: "tag" }, "recommended"));
+  if (!env.supported) tags.push(h("span", { class: "tag warn" }, "not supported by this interface"));
+  const actions = h("span", { class: "actions" });
+  if (!env.selected && env.supported) actions.append(h("button", { disabled: busy, onclick: () => run("pysme/use", { id: env.id }) }, "Use"));
+  actions.append(h("button", {
+    title: "Save the exact package versions, to recreate this installation on another computer",
+    onclick: async () => {
+      const path = await pickFile({ mode: "save", title: "Save package list", extensions: ["txt"], name: `pysme-${env.pysme_version}-packages.txt` });
+      if (path) {
+        try {
+          await request("pysme/export", { id: env.id, path });
+          toast("Package list saved.");
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      }
+      await showSettings();
+    },
+  }, "Package list…"));
+  if (!env.selected && !env.running) {
+    actions.append(h("button", {
+      disabled: busy,
+      onclick: async () => {
+        const yes = await confirmDialog(`Remove PySME ${env.pysme_version}?`,
+          "Scripts that use its Python will stop working. Installing the version again may bring newer versions of the other packages; save the package list first if you need exactly the same.", "Remove");
+        if (yes) await run("pysme/remove", { id: env.id });
+        else await showSettings();
+      },
+    }, "Remove"));
+  }
+  return h("li", {},
+    h("span", {}, h("b", {}, env.pysme_version), " ", tags,
+      h("small", {}, `SMElib ${shortSmelib(env.smelib_version)} · installed ${env.created.slice(0, 10)}`)),
+    actions);
+}
+
+function installRow(info, busy, run) {
+  const releases = info.latest?.releases;
+  if (!releases) {
+    return h("p", { class: "hint" }, "Press “Check for updates” to list the versions you can install.");
+  }
+  const installed = new Set(info.environments.map((e) => e.pysme_version));
+  const choices = releases.filter((r) => !installed.has(r.version) && (ui.prereleases || !r.prerelease));
+  const select = h("select", { "aria-label": "Version to install", disabled: busy || !choices.length, onchange: () => { ui.installChoice = select.value; } },
+    choices.map((r) => h("option", { value: r.version }, `${r.version}  (${r.date})${r.version === info.recommended ? " — recommended" : ""}${r.prerelease ? " — pre-release" : ""}`)));
+  if (choices.some((r) => r.version === ui.installChoice)) select.value = ui.installChoice;
+  const early = h("input", { type: "checkbox", onchange: () => { ui.prereleases = early.checked; showSettings(info); } });
+  early.checked = Boolean(ui.prereleases);
+  const newer = info.latest.pysme_new;
+  return h("div", {},
+    h("div", { class: "row" },
+      choices.length ? select : h("span", { class: "hint" }, "No other version to install."),
+      h("button", { disabled: busy || !choices.length, onclick: () => run("pysme/install", { version: select.value }) }, "Install"),
+      h("label", { class: "check" }, early, " pre-releases")),
+    newer ? h("p", {}, h("b", {}, `PySME ${newer} is new.`), " Installing it keeps the versions you have.") : "",
+    h("p", { class: "hint" }, `This interface works with PySME ${info.supported}. Installing does not switch to the new version.`));
+}
+
 async function restartApp() {
   if (S.dirty && !(await confirmDialog("Restart with unsaved changes?", "Changes that were not saved will be lost.", "Restart"))) return;
   toNative({ type: "restart" });
+}
+
+/* ---------------------------------------------------------- problem reports */
+
+/* Three steps: describe, check what will be shared, then save and mail it. */
+function showReport(draft = { description: "", settings: false }) {
+  clearTimeout(settingsTimer);
+  const description = h("textarea", { rows: 6, "aria-label": "Description", placeholder: "What were you doing? What did you expect, and what happened instead? (any language)" });
+  description.value = draft.description;
+  const include = h("input", { type: "checkbox" });
+  include.checked = draft.settings;
+  const next = h("button", {
+    class: "secondary",
+    onclick: async () => {
+      next.disabled = true;
+      draft = { description: description.value, settings: include.checked };
+      try {
+        const { text } = await request("report/preview", { ...draft, client: { agent: navigator.userAgent, errors: recentErrors } });
+        reviewReport(text, draft);
+      } catch (error) {
+        toast(error.message, "error");
+        next.disabled = false;
+      }
+    },
+  }, "Create report");
+  openDialog("Report a problem", h("div", { class: "report" },
+    h("p", {}, "This makes one text file with the program versions, your system and the recent log, which you can send by email or attach to a GitHub issue. Nothing is sent automatically."),
+    description,
+    h("label", { class: "check" }, include, " Also include my current settings (stellar parameters, wavelength ranges, fit values)"),
+    h("p", { class: "hint" }, "Spectra and line lists are never included. You can read and edit the report in the next step.")),
+    [h("button", { onclick: () => $("#dialog").close() }, "Cancel"), next]);
+}
+
+function reviewReport(text, draft) {
+  const preview = h("textarea", { class: "report-text", rows: 18, "aria-label": "Report contents" });
+  preview.spellcheck = false;
+  preview.value = text;
+  openDialog("Check the report", h("div", { class: "report" },
+    h("p", {}, "This is everything that will be in the file. Delete anything you do not want to share, such as file or star names."),
+    preview),
+    [h("button", { onclick: () => showReport(draft) }, "Back"), h("button", {
+      class: "secondary",
+      onclick: async () => {
+        try {
+          sendReport(await request("report/save", { text: preview.value }));
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      },
+    }, "Save report")]);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied.");
+  } catch (error) {
+    toast("Copying is not allowed here. Select the text and copy it.", "error");
+  }
+}
+
+/* A web page cannot attach a file to an email; the Mac app can, if a mail
+   program is set up. So the manual way is always shown as well. */
+function sendReport(saved) {
+  const writeEmail = () => {
+    if (NATIVE) return toNative({ type: "mailReport", path: saved.path, to: saved.email, subject: saved.subject, body: saved.body });
+    const query = `subject=${encodeURIComponent(saved.subject)}&body=${encodeURIComponent(saved.body)}`;
+    h("a", { href: `mailto:${encodeURIComponent(saved.email).replace("%40", "@")}?${query}`, target: "_blank" }).click();
+  };
+  const openIssue = () => {
+    const link = h("a", { href: saved.issue_url, rel: "noopener" });
+    // The Mac app hands web links to the system browser; elsewhere use a new tab.
+    if (!NATIVE) link.target = "_blank";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    request("report/reveal", {}).catch(() => {});
+  };
+  const row = (label, value) => [h("span", {}, label), h("span", {}, h("span", { class: "selectable" }, value), " ", h("button", { class: "link", onclick: () => copyText(value) }, "Copy"))];
+  openDialog("Send the report", h("div", { class: "report" },
+    h("p", {}, h("b", {}, "The report is saved. It has not been sent yet."), " Choose either way:"),
+    h("div", { class: "kv" }, row("File", saved.path)),
+    h("div", { class: "send-ways" },
+      h("div", { class: "send-way" },
+        h("h3", {}, "Email"),
+        h("p", {}, NATIVE
+          ? "Opens your mail program with the file attached. If nothing opens, or you use webmail, write the email yourself and attach the file."
+          : "Opens your mail program. Please attach the file yourself. With webmail, write the email there."),
+        saved.email
+          ? h("div", { class: "kv" }, row("Send to", saved.email), row("Subject", saved.subject))
+          : h("p", { class: "hint" }, "No report address is set in this version. Send the file to the person who gave you the program."),
+        h("button", { class: "secondary", onclick: writeEmail }, "Write email")),
+      h("div", { class: "send-way" },
+        h("h3", {}, "GitHub issue"),
+        h("p", {}, "Needs a GitHub account and access to github.com. A new issue opens in your browser: drag the file into it."),
+        h("p", { class: "hint" }, "Issues are public: anyone can read the attached file."),
+        h("button", { class: "secondary", onclick: openIssue }, "Open GitHub issue")))),
+    [
+      h("button", { onclick: () => request("report/reveal", {}).catch((e) => toast(e.message, "error")) }, "Show file"),
+      h("button", { onclick: () => $("#dialog").close() }, "Done"),
+    ]);
 }
 
 /* ----------------------------------------------------------------- commands */
@@ -1051,6 +1263,7 @@ const commands = {
   fit() { commitEdits(); send("run", { kind: "fit" }); },
   stop() { send("cancel"); },
   settings() { showSettings().catch((e) => toast(e.message, "error")); },
+  report() { showReport(); },
 };
 
 function resetView() {
@@ -1258,6 +1471,8 @@ async function start() {
   $("#fit-element").replaceChildren(...elements.filter((e) => e.z > 2).map((e) => h("option", { value: e.el }, e.el)));
   $("#fit-element").value = "Mg";
   renderForms(true);
+  const { notice } = await request("settings");
+  if (notice) toast(notice, "error");
   // Quietly look for a newer version; only sets the dot on the settings button.
   request("update/check", {}).then(refresh).catch(() => {});
 }

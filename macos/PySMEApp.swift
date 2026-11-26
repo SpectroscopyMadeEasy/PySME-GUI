@@ -20,7 +20,17 @@ struct Paths {
     var settings: URL { home.appendingPathComponent("settings.json") }
     var log: URL { home.appendingPathComponent("logs/app.log") }
 
-    func slot(_ id: String) -> URL { home.appendingPathComponent("slots/\(id)") }
+    // The interface and PySME are installed separately (see envmanager.py).
+    func gui(_ id: String) -> URL { home.appendingPathComponent("gui/\(id)") }
+    func env(_ id: String) -> URL { home.appendingPathComponent("envs/\(id)") }
+    func python(_ env: String) -> URL { self.env(env).appendingPathComponent("venv/bin/python") }
+}
+
+/// The interface and PySME environment in use.
+struct Selection {
+    let gui: String
+    let env: String
+    let guiVersion: String
 }
 
 func readJSON(_ url: URL) -> [String: Any] {
@@ -71,10 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     var paths: Paths!
     var window: NSWindow!
     var web: WKWebView!
-    var setupView: NSView!
-    var statusLabel: NSTextField!
-    var spinner: NSProgressIndicator!
-    var logView: NSTextView!
+    var setupView: WKWebView!           // setup.html: setup, start-up, failures
+    var setupReady = false
+    var setupQueue: [String] = []
 
     var installer: Process?
     var server: Process?
@@ -103,7 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         openLog()
         buildMenu()
         buildWindow()
-        NSApp.activate(ignoringOtherApps: true)
+        // The build check must not take the keyboard away from other programs.
+        if environment["PYSME_GUI_SELFTEST"] == nil { NSApp.activate(ignoringOtherApps: true) }
         boot()
     }
 
@@ -124,13 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         logHandle?.write(Data((safe + "\n").utf8))
         recent.append(safe)
         if recent.count > 60 { recent.removeFirst() }
-        if show {
-            logView.textStorage?.append(NSAttributedString(string: safe + "\n", attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
-            logView.scrollToEndOfDocument(nil)
-        }
+        if show { setupCall("line(\(jsString(safe)))") }
     }
 
     func buildWindow() {
@@ -152,47 +156,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         web.navigationDelegate = self
         web.uiDelegate = self
 
-        spinner = NSProgressIndicator()
-        spinner.style = .spinning
-        statusLabel = NSTextField(wrappingLabelWithString: "")
-        statusLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        statusLabel.alignment = .center
-        let scroll = NSTextView.scrollableTextView()
-        logView = (scroll.documentView as! NSTextView)
-        logView.isEditable = false
+        let setupConfiguration = WKWebViewConfiguration()
+        setupConfiguration.userContentController.add(self, name: "setup")
+        setupView = WKWebView(frame: .zero, configuration: setupConfiguration)
+        setupView.navigationDelegate = self
+        let page = paths.resources.appendingPathComponent("setup.html")
+        setupView.loadFileURL(page, allowingReadAccessTo: paths.resources)
 
-        let stack = NSStackView(views: [spinner, statusLabel, scroll])
-        stack.orientation = .vertical
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        setupView = NSView()
-        setupView.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: setupView.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: setupView.centerYAnchor),
-            stack.widthAnchor.constraint(equalToConstant: 640),
-            statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.heightAnchor.constraint(equalToConstant: 220),
-        ])
         window.contentView = setupView
         window.makeKeyAndOrderFront(nil)
     }
 
-    func showSetup(_ text: String) {
-        statusLabel.stringValue = text
-        spinner.startAnimation(nil)
+    /// Run `window.setup.<call>`, waiting for the page when necessary.
+    func setupCall(_ call: String) {
+        if setupReady { setupView.evaluateJavaScript("window.setup.\(call)") }
+        else { setupQueue.append(call) }
+    }
+
+    func showSetup(_ mode: String, _ title: String, _ note: String = "") {
+        setupCall("show(\(jsString(mode)), \(jsString(title)), \(jsString(note)))")
         if window.contentView !== setupView { window.contentView = setupView }
     }
 
     // MARK: - environment
 
-    func activeSlot() -> (id: String, info: [String: Any])? {
-        guard let id = readJSON(paths.current)["current"] as? String else { return nil }
-        let info = readJSON(paths.slot(id).appendingPathComponent("slot.json"))
-        let python = paths.slot(id).appendingPathComponent("venv/bin/python").path
-        if info.isEmpty || !FileManager.default.isExecutableFile(atPath: python) { return nil }
-        return (id, info)
+    func activeSelection() -> Selection? {
+        guard let current = readJSON(paths.current)["current"] as? [String: Any],
+              let gui = current["gui"] as? String, let env = current["env"] as? String,
+              let version = readJSON(paths.gui(gui).appendingPathComponent("gui.json"))["version"] as? String,
+              !readJSON(paths.env(env).appendingPathComponent("env.json")).isEmpty,
+              FileManager.default.isExecutableFile(atPath: paths.python(env).path)
+        else { return nil }
+        return Selection(gui: gui, env: env, guiVersion: version)
     }
 
     var bundleVersion: String {
@@ -219,33 +214,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         serverURL = nil
         pageReady = false
         recent = []
-        logView.string = ""
         record("--- start \(Date()) build \(bundleID) ---")
 
-        guard let slot = activeSlot() else {
-            install(reason: "Setting up PySME for the first time.\nThis downloads Python and PySME (about 200 MB) and happens only once.")
+        guard let active = activeSelection() else {
+            install("Setting up PySME", "This downloads Python and PySME (about 200 MB). It happens only once.")
             return
         }
-        // A newer app dragged into Applications brings newer GUI code with it.
+        // A newer app dragged into Applications brings a newer interface with it.
         let installedFrom = readJSON(paths.current)["bundle_id"] as? String
-        let slotGUI = slot.info["gui_version"] as? String ?? "0"
         if installedFrom != bundleID,
-           bundleVersion.compare(slotGUI, options: .numeric) != .orderedAscending {
-            install(reason: "Updating PySME to match this version of the app…")
+           bundleVersion.compare(active.guiVersion, options: .numeric) != .orderedAscending {
+            install("Updating PySME", "Installing the interface that comes with this app. "
+                    + "The PySME version you chose is kept if the interface supports it.")
             return
         }
-        startServer(slot: slot.id)
+        startServer(active)
     }
 
-    func install(reason: String) {
-        showSetup(reason)
+    func install(_ title: String, _ note: String, repair: Bool = false) {
+        showSetup("install", title, note)
+        // Downloading Python happens before the installer prints its first step.
+        setupCall("step(1)")
         let process = Process()
         process.executableURL = paths.uv
         process.arguments = [
             "run", "--no-project", "--managed-python", "--python", "3.12",
             paths.source.appendingPathComponent("pysme_gui/envmanager.py").path,
             "install", "--source", paths.source.path, "--bundle-id", bundleID,
-        ]
+        ] + (repair ? ["--repair"] : [])
         var env = childEnvironment()
         env["PYTHONDONTWRITEBYTECODE"] = "1"   // keep the signed bundle unchanged
         process.environment = env
@@ -256,14 +252,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         readers = [LineReader(pipe) { [weak self] line in
             guard let self = self else { return }
             self.record(line, show: true)
-            if line.hasPrefix("STEP ") { self.statusLabel.stringValue = reason + "\n\nStep " + line.dropFirst(5) }
+            if line.hasPrefix("STEP "), let number = line.dropFirst(5).first?.wholeNumberValue {
+                self.setupCall("step(\(number))")
+                self.snapshotSetup("setup-step-\(number)")
+            }
         }]
         process.terminationHandler = { [weak self] finished in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard let self = self, self.installer === finished else { return }
                 self.installer = nil
-                if finished.terminationStatus == 0, let slot = self.activeSlot() {
-                    self.startServer(slot: slot.id)
+                if finished.terminationStatus == 0, let active = self.activeSelection() {
+                    self.startServer(active)
                 } else {
                     self.installFailed()
                 }
@@ -278,15 +277,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func installFailed() {
-        spinner.stopAnimation(nil)
-        let old = activeSlot()
+        setupCall("fail()")
+        let old = activeSelection()
         var buttons = ["Try again"]
         if old != nil { buttons.append("Use the installed version") }
         buttons.append("Quit")
+        buttons.insert(reportButton, at: buttons.count - 1)
+        if let target = environment["PYSME_GUI_SELFTEST"] {
+            // The build check can force this path; keep its report with the results.
+            _ = writeShellReport("Setup did not finish.", in: URL(fileURLWithPath: target))
+            snapshotSetup("setup-failed") { NSApp.terminate(nil) }
+            return
+        }
         let choice = ask("Setup did not finish",
                          "Check the internet connection and try again.\n\n" + tail(), buttons)
-        if choice == "Try again" { boot() }
-        else if choice == "Use the installed version", let slot = old { startServer(slot: slot.id) }
+        if choice == reportButton {
+            reportFromShell("Setup did not finish.")
+            installFailed()
+        }
+        else if choice == "Try again" { boot() }
+        else if choice == "Use the installed version", let active = old { startServer(active) }
         else { NSApp.terminate(nil) }
     }
 
@@ -301,12 +311,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return buttons.indices.contains(index) ? buttons[index] : buttons.last!
     }
 
-    func startServer(slot: String) {
-        showSetup("Starting PySME…")
+    func startServer(_ active: Selection) {
+        showSetup("start", "Starting PySME")
         let custom = readJSON(paths.settings)["python"] as? String
         let python = (custom?.isEmpty == false)
             ? custom!
-            : paths.slot(slot).appendingPathComponent("venv/bin/python").path
+            : paths.python(active.env).path
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
         var arguments = ["-m", "pysme_gui", "--app-mode", "--parent-pid", String(getpid())]
@@ -316,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         process.arguments = arguments
         var env = childEnvironment()
-        env["PYTHONPATH"] = paths.slot(slot).appendingPathComponent("app").path
+        env["PYTHONPATH"] = paths.gui(active.gui).path
         process.environment = env
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         let pipe = Pipe()
@@ -354,14 +364,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func serverStopped(custom: String?) {
-        spinner.stopAnimation(nil)
-        showSetup("The PySME process stopped.")
-        spinner.stopAnimation(nil)
+        showSetup("stopped", "PySME stopped", "The PySME process is no longer running.")
+        for line in recent.suffix(30) { setupCall("line(\(jsString(line)))") }
         var buttons = ["Restart"]
         if custom?.isEmpty == false { buttons.append("Use the app's own PySME") }
-        if readJSON(paths.current)["previous"] is String { buttons.append("Go back to previous version") }
-        buttons.append(contentsOf: ["Reinstall", "Quit"])
+        let goBack = "Go back to previous setup"     // interface and PySME, before the last change
+        if readJSON(paths.current)["previous"] is [String: Any] { buttons.append(goBack) }
+        buttons.append(contentsOf: ["Reinstall", reportButton, "Quit"])
         switch ask("PySME stopped unexpectedly", tail(), buttons) {
+        case reportButton:
+            reportFromShell("The PySME process stopped unexpectedly.")
+            serverStopped(custom: custom)
         case "Restart":
             boot()
         case "Use the app's own PySME":
@@ -371,7 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 try? data.write(to: paths.settings, options: .atomic)
             }
             boot()
-        case "Go back to previous version":
+        case goBack:
             var record = readJSON(paths.current)
             let previous = record["previous"]
             record["previous"] = record["current"]
@@ -381,7 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             }
             boot()
         case "Reinstall":
-            install(reason: "Reinstalling PySME…")
+            install("Reinstalling PySME", "Rebuilding with the same package versions.", repair: true)
         default:
             NSApp.terminate(nil)
         }
@@ -396,10 +409,150 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         if process.isRunning { kill(process.processIdentifier, SIGKILL) }
     }
 
+    // MARK: - problem reports
+
+    // The interface writes the full report. This smaller one is for when it
+    // cannot run: setup failed, or the PySME process does not start.
+
+    let reportButton = "Report a problem…"
+
+    var feedbackEmail: String {
+        Bundle.main.infoDictionary?["PySMEFeedbackEmail"] as? String ?? ""
+    }
+
+    /// Remove user names from paths; the token is already kept out of the log.
+    func redact(_ text: String) -> String {
+        var result = text.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        result = result.replacingOccurrences(
+            of: "(/Users/)(?!Shared\\b)[^/\\n'\":]+", with: "$1<user>", options: .regularExpression)
+        return result.replacingOccurrences(
+            of: "(token=)[A-Za-z0-9_\\-]+", with: "$1<hidden>", options: .regularExpression)
+    }
+
+    func writeShellReport(_ problem: String, in folder: URL? = nil) -> URL? {
+        func ascii(_ path: String) -> String { path.allSatisfy(\.isASCII) ? "yes" : "NO" }
+        var system = utsname()
+        uname(&system)
+        let machine = withUnsafeBytes(of: &system.machine) {
+            String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        let log = (try? Data(contentsOf: paths.log)).map { String(decoding: $0.suffix(200_000), as: UTF8.self) } ?? ""
+        let current = (try? String(contentsOf: paths.current, encoding: .utf8)) ?? "-"
+        let lines: [String] = [
+            "PySME-GUI problem report (written by the Mac app, not by the interface)",
+            "Created: \(ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: .withInternetDateTime))",
+            "", "== What happened ==", problem,
+            "(Please also describe in your email what you were doing.)",
+            "", "== Versions ==",
+            "App: \(bundleID)",
+            "", "== System ==",
+            "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            "Machine: \(machine)",
+            "Locale: \(Locale.current.identifier)",
+            "Home path is plain ASCII: \(ascii(NSHomeDirectory()))",
+            "App data path is plain ASCII: \(ascii(paths.home.path))",
+            "App location is plain ASCII: \(ascii(Bundle.main.bundlePath))",
+            "App location: \(Bundle.main.bundlePath)",
+            "", "== Installation ==",
+            "Custom Python setting: \(readJSON(paths.settings)["python"] as? String ?? "-")",
+            current,
+            "", "== Application log ==",
+        ] + log.split(separator: "\n", omittingEmptySubsequences: false).suffix(300).map(String.init)
+        let text = redact(lines.joined(separator: "\n") + "\n")
+
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.dateFormat = "yyyyMMdd-HHmmss"
+        let name = "PySME-report-\(stamp.string(from: Date())).txt"
+        let manager = FileManager.default
+        let folders = folder.map { [$0] } ?? [
+            manager.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+            manager.homeDirectoryForCurrentUser,
+        ].compactMap { $0 }
+        for directory in folders {
+            try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(name)
+            if (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil { return url }
+        }
+        return nil
+    }
+
+    /// Start an email with the report attached. Without a mail program that can
+    /// take attachments, open a plain message and show the file instead.
+    func composeMail(_ file: URL, to: String, subject: String, body: String) {
+        let recipients = to.isEmpty ? [] : [to]
+        if let service = NSSharingService(named: .composeEmail), service.canPerform(withItems: [body, file]) {
+            service.recipients = recipients
+            service.subject = subject
+            service.perform(withItems: [body, file])
+            return
+        }
+        var link = URLComponents()
+        link.scheme = "mailto"
+        link.path = to
+        link.queryItems = [URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "body", value: body)]
+        if let url = link.url { NSWorkspace.shared.open(url) }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    /// A pre-filled GitHub issue. Only versions go into the address; the user
+    /// attaches the file.
+    func openIssue(_ file: URL) {
+        let repo = Bundle.main.infoDictionary?["PySMEIssueRepo"] as? String ?? ""
+        var link = URLComponents(string: "https://github.com/\(repo)/issues/new")
+        link?.queryItems = [
+            URLQueryItem(name: "title", value: "PySME-GUI problem report (app \(bundleVersion), macOS)"),
+            URLQueryItem(name: "body", value: "**What happened?**\n\n\n**Report file:** please drag `\(file.lastPathComponent)` into this box. Issues are public.\n\nApp: \(bundleID)\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)"),
+        ]
+        if let url = link?.url { NSWorkspace.shared.open(url) }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    func reportFromShell(_ problem: String) {
+        guard let file = writeShellReport(problem) else {
+            _ = ask("Could not save the report", tail(), ["OK"])
+            return
+        }
+        let address = feedbackEmail.isEmpty
+            ? "Send this file to the person who gave you the program."
+            : "Send this file to \(feedbackEmail)."
+        let choice = ask("Report saved",
+                         "\(file.path)\n\nIt has not been sent yet.\n\n"
+                         + "Email: \(address) “Write email” tries to attach the file; "
+                         + "with webmail, attach it yourself.\n\n"
+                         + "GitHub issue: needs a GitHub account. Drag the file into the page. Issues are public.",
+                         ["Write email", "Open GitHub issue", "Show file", "Back"])
+        if choice == "Back" { return }
+        if choice == "Show file" {
+            NSWorkspace.shared.activateFileViewerSelecting([file])
+        } else if choice == "Open GitHub issue" {
+            openIssue(file)
+        } else {
+            composeMail(file, to: feedbackEmail, subject: "PySME-GUI problem report (app \(bundleVersion), macOS)",
+                        body: "My problem report is in the file \(file.lastPathComponent).\n(If it is not attached yet, please attach it before sending.)\n")
+        }
+        // Come back to this message, so that the other program is not covered
+        // by the next question straight away.
+        _ = ask("Continue", "Press Continue when you are done.", ["Continue"])
+    }
+
+    @objc func reportProblem(_ sender: Any?) {
+        let fallback = { self.reportFromShell("Reported from the Help menu while the interface was not available.") }
+        guard pageReady else { return fallback() }
+        web.evaluateJavaScript("typeof window.guiCommand === 'function' && (window.guiCommand('report'), true)") { value, _ in
+            if (value as? Bool) != true { fallback() }
+        }
+    }
+
     // MARK: - web view
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        spinner.stopAnimation(nil)
+        if webView === setupView {
+            setupReady = true
+            setupQueue.forEach { setupCall($0) }
+            setupQueue = []
+            return
+        }
         window.contentView = web
         window.makeFirstResponder(web)
         pageReady = true
@@ -414,6 +567,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.cancel) }
+        if webView === setupView {
+            // It only ever shows the page bundled with the app.
+            let bundled = url.isFileURL && url.lastPathComponent == "setup.html"
+            return decisionHandler(bundled ? .allow : .cancel)
+        }
         if url.host == "127.0.0.1" && url.port == serverURL?.port {
             decisionHandler(.allow)
         } else if url.scheme == "https" || url.scheme == "http" {
@@ -431,10 +589,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if let url = serverURL { web.load(URLRequest(url: url)) }
+        if webView === setupView {
+            setupReady = false
+            setupView.reload()
+        } else if let url = serverURL { web.load(URLRequest(url: url)) }
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if controller === setupView.configuration.userContentController {
+            if message.body as? String == "report" {
+                reportFromShell("Setup is taking very long.")
+            }
+            return
+        }
         // Only the local interface may use the native bridge.
         guard message.frameInfo.securityOrigin.host == "127.0.0.1",
               let body = message.body as? [String: Any],
@@ -467,6 +634,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             panel.beginSheetModal(for: window) { response in
                 if response == .OK, let url = panel.url { try? data.write(to: url) }
             }
+        case "mailReport":
+            let file = URL(fileURLWithPath: body["path"] as? String ?? "")
+            // Only a saved report may be attached.
+            guard file.lastPathComponent.hasPrefix("PySME-report-"), file.pathExtension == "txt",
+                  FileManager.default.fileExists(atPath: file.path) else { break }
+            composeMail(file, to: body["to"] as? String ?? "",
+                        subject: body["subject"] as? String ?? "", body: body["body"] as? String ?? "")
         case "restart":
             startGeneration += 1
             stopServer()
@@ -486,6 +660,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     // MARK: - self test
 
+    /// During the build check, keep pictures of the setup page.
+    func snapshotSetup(_ name: String, then done: (() -> Void)? = nil) {
+        guard let target = environment["PYSME_GUI_SELFTEST"] else { done?(); return }
+        let output = URL(fileURLWithPath: target)
+        try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            self.setupView.takeSnapshot(with: nil) { image, _ in
+                self.writePNG(image, to: output.appendingPathComponent("\(name).png"))
+                done?()
+            }
+        }
+    }
+
+    func writePNG(_ image: NSImage?, to url: URL) {
+        if let tiff = image?.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+        }
+    }
+
     /// Used by the build script: run the solar example inside the real WebKit
     /// window, write a screenshot and a short report, then quit.
     func runSelfTest(into directory: String) {
@@ -498,7 +692,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         await send('run', { kind: 'synth' });
         for (let i = 0; i < 600 && S.job.state === 'running'; i++) await wait(500);
         await wait(1500);
+        const report = await request('report/preview', {});
         return JSON.stringify({
+          reportOk: report.text.includes('== Versions ==') && report.text.includes('Application log'),
           native: NATIVE, job: S.job.state, error: S.job.error || null,
           pixels: spectrum.segments.reduce((n, s) => n + s.wave.length, 0),
           minFlux: Math.min(...(spectrum.segments[0]?.synth || [NaN])),
@@ -517,10 +713,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 }
                 try? report.write(to: output.appendingPathComponent("report.json"), atomically: true, encoding: .utf8)
                 self.web.takeSnapshot(with: nil) { image, _ in
-                    if let tiff = image?.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-                       let png = rep.representation(using: .png, properties: [:]) {
-                        try? png.write(to: output.appendingPathComponent("window.png"))
-                    }
+                    self.writePNG(image, to: output.appendingPathComponent("window.png"))
                     self.quitConfirmed = true
                     NSApp.terminate(nil)
                 }
@@ -580,11 +773,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     @objc func repair(_ sender: Any?) {
         if installer != nil { return }
-        if ask("Reinstall PySME?", "A fresh environment is built. Unsaved changes in the window are lost. Your files and ~/.sme are not touched.", ["Reinstall", "Cancel"]) == "Reinstall" {
+        if ask("Reinstall PySME?", "The environment in use is rebuilt with the same package versions. Unsaved changes in the window are lost. Your files and ~/.sme are not touched.", ["Reinstall", "Cancel"]) == "Reinstall" {
             startGeneration += 1
             stopServer()
             pageReady = false
-            install(reason: "Reinstalling PySME…")
+            install("Reinstalling PySME", "Rebuilding with the same package versions.", repair: true)
         }
     }
 
@@ -658,6 +851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         NSApp.windowsMenu = windowMenu
 
         let help = menu("Help")
+        add(help, "Report a Problem…", #selector(reportProblem(_:)), target: self)
         add(help, "Show App Data and Logs", #selector(showDataFolder(_:)), target: self)
         add(help, "Reinstall PySME…", #selector(repair(_:)), target: self)
 

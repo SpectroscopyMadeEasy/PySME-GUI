@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -22,7 +23,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, envmanager
+from . import FEEDBACK_EMAIL, ISSUE_REPO, __version__, envmanager, report
 from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
 
@@ -55,59 +56,145 @@ def smelib_version():
         return f"not loadable: {exc}"
 
 
+def _inside(path, directory):
+    return os.path.realpath(path).startswith(os.path.realpath(directory) + os.sep)
+
+
 def is_managed():
-    """True when this interpreter belongs to one of the app's own slots."""
-    slots = os.path.realpath(os.path.join(envmanager.app_home(), "slots"))
-    return os.path.realpath(sys.prefix).startswith(slots + os.sep)
+    """True when this interpreter belongs to one of the app's own environments."""
+    return _inside(sys.prefix, os.path.join(envmanager.app_home(), "envs"))
+
+
+def own_constants():
+    return envmanager.package_constants(os.path.dirname(os.path.abspath(__file__)))
 
 
 class Updater:
+    """Updates of the interface, and the installed PySME versions.
+
+    The two are independent: updating the interface never changes PySME, and
+    installing a PySME version never switches to it.
+    """
+
     def __init__(self, log):
         self.log = log
         self.state = {"state": "idle"}
         self.latest = None
         self._lock = threading.Lock()
 
+    @staticmethod
+    def constants():
+        """Constants of the interface that will run after a restart."""
+        if is_managed():
+            chosen = envmanager.gui_info(envmanager.selection()[0])
+            if chosen:
+                return chosen
+        return own_constants()
+
     def check(self):
-        result = {"checked": time.strftime("%H:%M"), "errors": []}
-        for key, getter in (
-            ("pysme", envmanager.latest_pysme_version),
-            ("gui", envmanager.latest_gui_version),
-        ):
-            try:
-                result[key] = getter()
-            except Exception as exc:
-                result[key] = None
-                result["errors"].append(f"{'PySME' if key == 'pysme' else 'GUI'}: {exc}")
+        result = {"checked": time.strftime("%H:%M"), "errors": [], "gui": None, "releases": None}
         newer = envmanager.version_key
-        result["pysme_newer"] = bool(result["pysme"]) and newer(result["pysme"]) > newer(pysme_version())
-        result["gui_newer"] = bool(result["gui"]) and newer(result["gui"]) > newer(__version__)
+        constants = self.constants()
+        try:
+            published = envmanager.latest_gui()
+            result["gui"] = published["version"]
+        except Exception as exc:
+            published = None
+            result["errors"].append(f"Interface: {exc}")
+        try:
+            result["releases"] = [
+                r for r in envmanager.available_pysme()
+                if envmanager.supports(constants, r["version"])
+            ]
+        except Exception as exc:
+            result["errors"].append(f"PySME: {exc}")
+        result["gui_newer"] = bool(result["gui"]) and newer(result["gui"]) > newer(constants["version"])
+        result["gui_blocked"] = None
+        if result["gui_newer"] and is_managed():
+            env = envmanager.env_info(envmanager.selection()[1])
+            if env and not envmanager.supports(published, env["pysme_version"]):
+                result["gui_blocked"] = (
+                    f"The new interface needs PySME {envmanager.supported_text(published)}. "
+                    "Install and switch to such a version before updating."
+                )
+        # Only tell about a release that is newer than everything installed, so
+        # that staying on an older version on purpose is not nagged about.
+        have = [i["pysme_version"] for i in envmanager.installed_envs()] if is_managed() else []
+        have.append(pysme_version())
+        stable = [r["version"] for r in result["releases"] or [] if not r["prerelease"]]
+        newest = stable[0] if stable else None
+        result["pysme_new"] = (
+            newest if newest and newer(newest) > max(map(newer, have)) else None
+        )
         self.latest = result
         return result
 
+    def _environments(self, constants):
+        selected = envmanager.selection()[1]
+        return [
+            dict(
+                info,
+                selected=info["id"] == selected,
+                running=_inside(sys.prefix, envmanager.env_dir(info["id"])),
+                supported=envmanager.supports(constants, info["pysme_version"]),
+            )
+            for info in envmanager.installed_envs()
+        ]
+
     def info(self):
-        record = envmanager.current_record()
+        managed = is_managed()
+        constants = self.constants()
+        record = envmanager.current_record() if managed else {}
         repo, ref = envmanager.update_target()
+        environments = self._environments(constants) if managed else []
+        previous = envmanager.gui_info(record.get("previous_gui"))
+        gui_id = envmanager.selection(record)[0]
+        restart = managed and bool(gui_id) and (
+            any(e["selected"] and not e["running"] for e in environments)
+            or not _inside(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
+        )
         return {
             "gui": __version__,
+            "gui_selected": constants["version"],
             "pysme": pysme_version(),
             "smelib": smelib_version(),
             "python": sys.executable,
             "python_version": sys.version.split()[0],
-            "managed": is_managed(),
+            "managed": managed,
             "custom_python": envmanager.settings().get("python"),
             "home": envmanager.app_home(),
             "source": os.environ.get(envmanager.SOURCE_ENV) or f"{repo} @ {ref}",
-            "previous": envmanager.slot_info(record.get("previous")),
+            # A reinstall of the same release is not worth offering to go back to.
+            "previous_gui": (
+                previous["version"]
+                if previous and previous["version"] != constants["version"] else None
+            ),
+            "environments": environments,
+            "recommended": constants["recommended"],
+            "supported": envmanager.supported_text(constants),
+            "restart": restart,
+            "notice": record.get("notice"),
             "latest": self.latest,
             "task": self.state,
         }
 
-    def _start(self, action):
+    @staticmethod
+    def _require_managed():
+        if not is_managed():
+            raise UserError(
+                "This PySME comes from your own Python environment. Manage versions there "
+                "(for example with pip)."
+            )
+
+    def _require_idle(self):
+        if self.state.get("state") == "running":
+            raise UserError("Wait for the running installation or update to finish.")
+
+    def _start(self, title, action, done):
+        self._require_managed()
         with self._lock:
-            if self.state.get("state") == "running":
-                raise UserError("An update is already running.")
-            self.state = {"state": "running", "step": "Starting"}
+            self._require_idle()
+            self.state = {"state": "running", "title": title, "step": "Starting"}
 
         def work():
             def log(text):
@@ -117,30 +204,74 @@ class Updater:
 
             try:
                 action(log)
-                self.state = {"state": "restart"}
+                self.state = {"state": "done", "message": done}
             except Exception as exc:
                 log(f"failed: {exc}")
-                self.state = {"state": "failed", "error": str(exc)}
+                self.state = {"state": "failed", "title": title, "error": str(exc)}
+            if self.latest:
+                have = [i["pysme_version"] for i in envmanager.installed_envs()]
+                if self.latest.get("pysme_new") in have:
+                    self.latest["pysme_new"] = None
 
         threading.Thread(target=work, daemon=True).start()
 
-    def apply(self, update_pysme, update_gui):
-        if not is_managed():
-            raise UserError(
-                "This PySME comes from your own Python environment. Update it there "
-                "(for example with pip)."
-            )
+    def update_gui(self):
+        self._require_managed()
         latest = self.latest or self.check()
-        version = latest["pysme"] if update_pysme and latest["pysme_newer"] else None
-        gui = bool(update_gui and latest["gui_newer"])
-        if not version and not gui:
-            raise UserError("Nothing to update.")
-        self._start(lambda log: envmanager.update(version, gui, log=log))
+        if not latest["gui_newer"]:
+            raise UserError("There is no newer interface.")
+        if latest["gui_blocked"]:
+            raise UserError(latest["gui_blocked"])
 
-    def rollback(self):
-        if not is_managed():
-            raise UserError("Only the app's own environment can be rolled back.")
-        self._start(lambda log: log(f"Now using {envmanager.rollback()}"))
+        def action(log):
+            envmanager.update_gui(log=log)
+            # It is installed now; do not offer it again.
+            self.latest["gui_newer"] = False
+
+        self._start("Updating the interface", action,
+                    "Interface updated. PySME is unchanged.")
+
+    def rollback_gui(self):
+        self._start("Going back to the previous interface",
+                    lambda log: envmanager.rollback_gui(log=log),
+                    "Went back to the previous interface. PySME is unchanged.")
+
+    def install_pysme(self, version):
+        version = str(version or "").strip()
+        if not re.fullmatch(r"[0-9][0-9A-Za-z.]*", version):
+            raise UserError("Choose a version to install.")
+        self._start(f"Installing PySME {version}",
+                    lambda log: envmanager.install_pysme(version, log=log),
+                    f"PySME {version} is installed. Press “Use” to switch to it.")
+
+    def use(self, env_id):
+        self._start("Switching PySME",
+                    lambda log: envmanager.use_env(str(env_id), log=log),
+                    "Switched. It takes effect after a restart.")
+
+    def _known(self, env_id):
+        if not any(i["id"] == env_id for i in envmanager.installed_envs()):
+            raise UserError("That PySME installation no longer exists.")
+        return env_id
+
+    def remove(self, env_id):
+        self._require_managed()
+        with self._lock:
+            self._require_idle()
+            try:
+                envmanager.remove_env(self._known(env_id), log=self.log.add)
+            except (OSError, RuntimeError) as exc:
+                raise UserError(str(exc))
+            self.state = {"state": "idle"}
+
+    def export(self, env_id, path):
+        self._require_managed()
+        if not path:
+            raise UserError("Choose a file name.")
+        try:
+            envmanager.export_lock(self._known(env_id), path)
+        except (OSError, RuntimeError) as exc:
+            raise UserError(str(exc))
 
 
 def set_custom_python(path):
@@ -200,6 +331,36 @@ class App:
         self.updater = Updater(self.log)
         self.token = secrets.token_urlsafe(24)
         self._options = None
+        self.report_path = None
+
+    def report_preview(self, body):
+        smelib = smelib_version()
+        with self.lock:
+            text = report.build(
+                str(body.get("description") or "")[:20_000], self.session, self.jobs.status(),
+                self.log.tail(report.LOG_LINES), smelib, is_managed(), self.updater.state,
+                client=body.get("client"), include_settings=bool(body.get("settings")),
+            )
+        return {"text": text}
+
+    def report_save(self, body):
+        text = str(body.get("text") or "")
+        if not text.strip():
+            raise UserError("The report is empty.")
+        try:
+            self.report_path = report.save(text)
+        except OSError as exc:
+            raise UserError(str(exc))
+        name = os.path.basename(self.report_path)
+        subject = f"PySME-GUI problem report (GUI {__version__}, {report.system_name()})"
+        return {
+            "path": self.report_path,
+            "email": FEEDBACK_EMAIL,
+            "subject": subject,
+            "issue_url": report.issue_url(ISSUE_REPO, subject, name, smelib_version()),
+            "body": f"My problem report is in the file {name}.\n"
+                    "(If it is not attached yet, please attach it before sending.)\n",
+        }
 
     def state(self):
         with self.lock:
@@ -255,11 +416,32 @@ class App:
         if route == "update/check":
             self.updater.check()
             return self.updater.info()
-        if route == "update/apply":
-            self.updater.apply(body.get("pysme"), body.get("gui"))
+        if route == "update/gui":
+            self.updater.update_gui()
             return self.updater.info()
+        if route == "pysme/install":
+            self.updater.install_pysme(body.get("version"))
+            return self.updater.info()
+        if route == "pysme/use":
+            self.updater.use(body.get("id"))
+            return self.updater.info()
+        if route == "pysme/remove":
+            self.updater.remove(body.get("id"))
+            return self.updater.info()
+        if route == "pysme/export":
+            self.updater.export(body.get("id"), body.get("path"))
+            return self.updater.info()
+        if route == "report/preview":
+            return self.report_preview(body)
+        if route == "report/save":
+            return self.report_save(body)
+        if route == "report/reveal":
+            if not self.report_path:
+                raise UserError("No report has been saved yet.")
+            report.reveal(self.report_path)
+            return {}
         if route == "update/rollback":
-            self.updater.rollback()
+            self.updater.rollback_gui()
             return self.updater.info()
         if route == "settings/python":
             version = set_custom_python(body.get("python"))

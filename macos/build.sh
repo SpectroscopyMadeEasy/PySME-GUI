@@ -13,6 +13,8 @@ DIST="$ROOT/dist"
 APP="$DIST/PySME.app"
 UV_VERSION="${UV_VERSION:-0.13.10}"
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/pysme_gui/__init__.py")"
+FEEDBACK_EMAIL="$(sed -n 's/^FEEDBACK_EMAIL = "\(.*\)"/\1/p' "$ROOT/pysme_gui/__init__.py")"
+ISSUE_REPO="$(sed -n 's/^ISSUE_REPO = "\(.*\)"/\1/p' "$ROOT/pysme_gui/__init__.py")"
 BUILD="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)-$(date +%Y%m%d%H%M)"
 
 echo "Building PySME $VERSION ($BUILD)"
@@ -45,7 +47,9 @@ cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 swiftc -O -target arm64-apple-macos14.0 "$ROOT/macos/PySMEApp.swift" -o "$APP/Contents/MacOS/PySME"
 swift "$ROOT/macos/make_icon.swift" "$ROOT/assets/pysme_logo-ver-light.png" "$DIST/work/PySME.iconset"
 iconutil -c icns "$DIST/work/PySME.iconset" -o "$APP/Contents/Resources/PySME.icns"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@BUILD@/$BUILD/g" "$ROOT/macos/Info.plist" > "$APP/Contents/Info.plist"
+cp "$ROOT/macos/setup.html" "$APP/Contents/Resources/setup.html"
+cp "$DIST/work/PySME.iconset/icon_128x128@2x.png" "$APP/Contents/Resources/setup-icon.png"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@BUILD@/$BUILD/g" -e "s/@FEEDBACK_EMAIL@/$FEEDBACK_EMAIL/g" -e "s|@ISSUE_REPO@|$ISSUE_REPO|g" "$ROOT/macos/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # 4. Sign. Without a Developer ID this is an ad-hoc signature (see README).

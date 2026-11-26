@@ -9,3 +9,16 @@ __version__ = "1.0.0"
 # Where the one-click updater looks for a newer GUI.
 UPDATE_REPO = "SpectroscopyMadeEasy/PySME-GUI"
 UPDATE_REF = "desktop-app"
+
+# PySME versions this interface works with (pysme-astro on PyPI). New users get
+# the recommended one; test it with this interface before every release. Users
+# keep the version they chose as long as it stays within these limits.
+PYSME_RECOMMENDED = "1.2.0"
+PYSME_MINIMUM = "1.2.0"
+PYSME_BELOW = "2.0"
+
+# Address for problem reports. While empty, users are told to send the file to
+# whoever gave them the program. macos/build.sh also reads this line.
+FEEDBACK_EMAIL = ""
+# GitHub repository for reports from users who have access to GitHub.
+ISSUE_REPO = "SpectroscopyMadeEasy/PySME-GUI"

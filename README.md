@@ -63,20 +63,63 @@ Things worth knowing when reading results:
 - Two uncertainties are shown (least-squares covariance and PySME's SME
   estimate). Neither includes model, line-data or continuum systematics.
 
-## Updates
+## Updates and PySME versions
 
-*Updates & settings* compares your versions with PySME on PyPI and with the GUI
-branch on GitHub (also checked quietly at start-up; a dot marks the button).
-**Update now** builds a second environment, checks that PySME runs in it, and
-only then switches over. A failed update changes nothing. After a restart you can
-*Go back to previous version*.
+The interface and PySME are versioned and updated separately, in *Updates &
+settings*. Updates are checked quietly at start-up (a dot marks the button);
+nothing is installed or switched on its own.
 
-The native window itself (the Swift part) only changes when you install a newer
-disk image.
+**Interface.** *Update interface* installs the newest one from the GitHub branch
+and checks that it starts with your current PySME; your PySME version is not
+changed. If the new interface does not support that version, it says so and
+changes nothing. *Back to previous interface* undoes it.
+
+**PySME.** Several versions can be installed side by side. *Install* adds one
+from PyPI without switching to it; *Use* switches (after a restart); *Remove*
+deletes one that is not in use. Only releases with a ready-made package for your
+computer are listed, pre-releases only on request. This interface supports the
+range given by `PYSME_MINIMUM` and `PYSME_BELOW`, and new users get
+`PYSME_RECOMMENDED`.
+
+**Reproducing a setup.** Each installation records the exact version of every
+package. *Help → Reinstall PySME…* rebuilds the one in use from that list.
+For large runs, either use the Python shown under the version list (scripts then
+get the same installation as the app), or save the *Package list…* and install it
+elsewhere with Python 3.12:
+
+```bash
+pip install --only-binary pysme-astro -r pysme-1.2.0-packages.txt
+```
+
+Builds differ between systems, so results need not agree bit for bit. Model
+atmospheres and NLTE grids in `~/.sme` are shared by all versions and are not
+part of the list. Exported CSV files and saved `.sme` files record the PySME,
+SMElib and interface versions that computed the spectrum (in CSV files as a
+first line starting with `#`; with pandas use `read_csv(..., comment="#")`).
+
+The native window itself (the Swift part, including the setup screen) only
+changes when you install a newer disk image. That also brings the interface in
+it, and keeps your PySME version if supported.
 
 **Use your own PySME.** In the same dialog you can point the app at another
-Python that has PySME, for example a development build. One-click update is then
-switched off. Clear the field to return to the app's own environment.
+Python that has PySME, for example a development build. Version management is
+then switched off. Clear the field to return to the app's own environment.
+
+## Reporting a problem
+
+*Report a problem…* (in *Updates & settings*, the ⋯ menu, the *Help* menu on
+macOS, and next to error messages) writes one text file with the program
+versions, system information and recent log. You read and can edit it before it
+is saved to *Downloads*; then you send it by email, or attach it to a GitHub
+issue (public; needs a GitHub account, and issues must be enabled in
+`ISSUE_REPO`). Nothing is sent automatically. Spectra and line lists are never included; stellar
+parameters and fit values only if you tick the box. User names in paths are
+removed, but file and star names in the log may remain, so check the text.
+
+The macOS app tries to start an email with the file attached. This needs a mail
+program that accepts attachments; with webmail, attach the file yourself. If
+setup fails or PySME does not start, the macOS error message has the same button
+and writes a shorter report.
 
 ## Where things live
 
@@ -110,10 +153,20 @@ To check the packaged app without clicking through it, start the binary with
 writes `report.json` and `window.png` there, and quits. Add
 `PYSME_GUI_HOME=<empty folder>` to include the first-launch setup.
 
-**Releasing.** The updater reads `UPDATE_REPO` and `UPDATE_REF` in
+**Releasing.** Test the interface with `PYSME_RECOMMENDED` (and with any other
+version you want to promise) before releasing. If a new interface needs another
+Python package that PySME does not already bring, existing installations fail
+the start check and keep the old interface: handle that before adding one. A
+change in `static/` that needs something new from the Swift shell only works for
+users who also install the new disk image.
+
+The updater reads `UPDATE_REPO` and `UPDATE_REF` in
 `pysme_gui/__init__.py` (currently branch `desktop-app`). To ship a GUI update,
 raise `__version__` there and push that branch. If the work is merged into
 another branch, change `UPDATE_REF` first.
+
+Set `FEEDBACK_EMAIL` in the same file to the address that should receive problem
+reports, then rebuild the disk image.
 
 Version 1.0 replaces the earlier Electron prototype, which remains in the history
 of `master`. The example line list `pysme_gui/examples/sun.lin` is the VALD

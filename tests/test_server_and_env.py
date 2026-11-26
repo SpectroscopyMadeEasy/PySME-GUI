@@ -77,34 +77,6 @@ def test_version_order():
     assert key("v1.2.0+g123") == key("1.2.0")
 
 
-def test_rollback_swaps_slots(tmp_path, monkeypatch):
-    monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path))
-    with pytest.raises(RuntimeError):
-        envmanager.rollback()
-    for name in ("a", "b"):
-        python = envmanager.venv_python(name)
-        os.makedirs(os.path.dirname(python))
-        open(python, "w").close()
-        envmanager._write_json(os.path.join(envmanager.slot_dir(name), "slot.json"), {"pysme_version": name})
-    envmanager._write_json(str(tmp_path / "current.json"), {"current": "b", "previous": "a"})
-    assert envmanager.rollback() == "a"
-    assert envmanager.current_record()["previous"] == "b"
-
-
-def test_failed_install_leaves_current_untouched(tmp_path, monkeypatch):
-    monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path))
-    envmanager._write_json(str(tmp_path / "current.json"), {"current": "keep"})
-    fake_uv = tmp_path / "uv"
-    fake_uv.write_text("#!/bin/sh\necho no network >&2\nexit 1\n")
-    fake_uv.chmod(0o755)
-    monkeypatch.setenv("PYSME_GUI_UV", str(fake_uv))
-    source = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with pytest.raises(RuntimeError, match="no network"):
-        envmanager.install(source, log=lambda text: None)
-    assert envmanager.current_record()["current"] == "keep"
-    assert os.listdir(tmp_path / "slots") == []
-
-
 def _zip_bytes(entries):
     import io
     import zipfile

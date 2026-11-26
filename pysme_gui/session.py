@@ -7,6 +7,7 @@ JSON produced here, so there is no second implementation of the SME file format.
 import io
 import math
 import os
+import re
 import time
 
 import numpy as np
@@ -108,6 +109,23 @@ def _segments(vector):
     return [np.asarray(vector[i]) for i in range(len(vector))]
 
 
+def software_versions():
+    import pysme
+
+    from . import __version__
+
+    try:
+        from pysme.smelib import _smelib
+
+        smelib = str(_smelib.LibraryVersion())
+        # "SME Library version: ... [SMElib ref: v6.13.20]" -> "v6.13.20"
+        reference = re.search(r"ref: (v[\w.]+)", smelib)
+        smelib = reference.group(1) if reference else smelib
+    except Exception:
+        smelib = "unknown"
+    return {"gui": __version__, "pysme": pysme.__version__, "smelib": smelib}
+
+
 class Session:
     def __init__(self):
         self.revision = 0
@@ -128,6 +146,7 @@ class Session:
         self.runs = []
         self._run_counter = 0
         self.synth_stale = False
+        self.computed_with = None  # versions that produced the current spectrum
         self.fit_info = None
         self.notes = []
         self._remember_abund_baseline()
@@ -177,6 +196,9 @@ class Session:
         meta = sme.meta or {}
         setup = meta.get("gui_synth_setup")
         self.synth_stale = bool(meta.get("gui_synth_stale", False))
+        used = meta.get("gui_computed_with")
+        if isinstance(used, dict) and {"gui", "pysme", "smelib"} <= set(used):
+            self.computed_with = dict(used)
         self.linelist_file = meta.get("gui_linelist_file")
         self._remember_abund_baseline()
 
@@ -717,6 +739,7 @@ class Session:
         meta["gui_linelist_file"] = self.linelist_file
         meta["gui_fit_info"] = self.fit_info
         meta["gui_synth_stale"] = self.synth_stale
+        meta["gui_computed_with"] = self.computed_with
         meta["gui_synth_setup"] = (
             {"ranges": self.ranges, "step": self.step} if self.obs is None else None
         )
@@ -769,6 +792,12 @@ class Session:
         if len(columns) < 2:
             raise UserError("Synthesize or import a spectrum first.")
         buffer = io.StringIO()
+        if self.computed_with and sme.synth is not None:
+            used = self.computed_with
+            buffer.write(
+                f"# synth computed with PySME {used['pysme']}, SMElib {used['smelib']}, "
+                f"PySME-GUI {used['gui']}\n"
+            )
         if self.synth_stale and sme.synth is not None:
             buffer.write("# WARNING: parameters changed after 'synth' was computed\n")
         buffer.write("segment," + ",".join(n for n, _ in columns) + "\n")
@@ -848,6 +877,7 @@ class Session:
         result.fitparameters = names
         self.sme = result
         self.synth_stale = False
+        self.computed_with = software_versions()
         if kind == "fit":
             self.fit_info = self._read_fit_results(result, initial)
             self.fit_info["restore"] = clean(restore)

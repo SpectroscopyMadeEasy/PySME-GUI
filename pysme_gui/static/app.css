@@ -260,6 +260,25 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .dialog-body { padding: 12px 16px; overflow: auto; flex: 1; min-height: 0; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
 .dialog-foot input[type="text"] { flex: 1; }
+.report textarea { width: 100%; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.report textarea.report-text { font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
+.versions { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
+.versions li { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; padding: 8px 12px; }
+.versions li + li { border-top: 1px solid var(--border); }
+.versions small { display: block; color: var(--muted); }
+.versions .actions { display: flex; gap: 6px; }
+.tag { display: inline-block; font-size: 11px; line-height: 1.6; padding: 0 7px; margin-right: 4px; border: 1px solid var(--border); border-radius: 99px; color: var(--muted); }
+.tag.on { border-color: var(--ok); color: var(--ok); }
+.tag.warn { border-color: var(--err); color: var(--err); }
+.send-ways { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.send-way { display: flex; flex-direction: column; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.send-way h3 { margin: 0 0 4px; }
+.send-way p { margin: 0 0 8px; }
+.send-way .kv { grid-template-columns: 60px minmax(0, 1fr); margin-bottom: 8px; }
+.send-way > button { margin-top: auto; }
+@media (max-width: 600px) { .send-ways { grid-template-columns: 1fr; } }
+.selectable { user-select: text; -webkit-user-select: text; }
+button.link { border: 0; background: transparent; padding: 0; color: var(--accent); text-decoration: underline; }
 .files { list-style: none; margin: 6px 0 0; padding: 0; }
 .files li button { display: block; width: 100%; text-align: left; border: 0; border-radius: 4px; background: transparent; overflow: hidden; text-overflow: ellipsis; }
 .files li button.selected { background: var(--surface-2); }

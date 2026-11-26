@@ -11,6 +11,8 @@
     <key>CFBundleShortVersionString</key><string>@VERSION@</string>
     <key>CFBundleVersion</key><string>@VERSION@</string>
     <key>PySMEBuild</key><string>@BUILD@</string>
+    <key>PySMEFeedbackEmail</key><string>@FEEDBACK_EMAIL@</string>
+    <key>PySMEIssueRepo</key><string>@ISSUE_REPO@</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
     <key>NSHighResolutionCapable</key><true/>

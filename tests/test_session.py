@@ -137,7 +137,9 @@ def test_synthesis_then_fit_recovers_injected_value(app, tmp_path):
     assert other.sme.synth is not None
 
     csv = session.export_csv(str(tmp_path / "out"))
-    header = open(csv).readline().strip()
+    with open(csv) as handle:
+        versions, header = handle.readline(), handle.readline().strip()
+    assert versions.startswith("# synth computed with PySME ")
     assert header == "segment,wave,flux_obs,uncertainty,mask,synth"
 
     session.revert_fit()
