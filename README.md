@@ -32,12 +32,22 @@ the first attempt, open *System Settings → Privacy & Security* and choose
 
 ### Linux (x86_64)
 
+Download the source archive (`Source code (tar.gz)`) of a release from the
+repository's *Releases* page, or clone the repository. In the unpacked folder run
+
 ```bash
 linux/install.sh
 ```
 
-This adds a `pysme-gui` command and a menu entry. The interface opens in your web
-browser. `linux/install.sh --uninstall` removes it.
+It needs `curl`, no administrator rights, and a network connection to fetch
+Python and PySME. It adds a `pysme-gui` command and a menu entry; the downloaded
+folder can be deleted afterwards (keep it, or download again, to uninstall with
+`linux/install.sh --uninstall`).
+
+The interface opens in your web browser. To quit, choose *⋯ → Quit PySME*.
+Closing the tab leaves it running with everything in it, and starting PySME
+again shows it. What it prints when started from the menu is kept in
+`~/.local/share/pysme-gui/pysme-gui.log`.
 
 Windows is planned for 0.3.0 and **does not work yet** (see
 [RELEASING.md](RELEASING.md)). Linux has not been tried on a real computer yet.

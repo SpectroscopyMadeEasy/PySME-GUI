@@ -357,6 +357,8 @@ pre { font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-spa
 td.ratio { white-space: nowrap; }
 td.ratio .hint { margin: 0; font-size: 11px; }
 .for-spectrum { display: contents; }
+.quit-page { margin: auto; text-align: center; }
+.quit-page p { color: var(--muted); }
 .plot-toolbar .for-pattern.hint { margin: 0; flex: 1 1 200px; }
 #pattern { position: absolute; inset: 0; z-index: 3; background: var(--surface); }
 .element-editor { min-width: 220px; max-width: 300px; flex: 1; }

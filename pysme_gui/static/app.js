@@ -175,6 +175,7 @@ function renderTop() {
   $("#forms").disabled = busy;
   const name = S.path ? S.path.split("/").pop() : "Untitled";
   document.title = `${name}${S.dirty ? " •" : ""} — PySME`;
+  $("#btn-quit").hidden = !S.can_quit;          // the Mac app has its own menu
   const badge = $("#stage-badge");
   badge.hidden = S.release.stage === "stable";
   badge.textContent = S.release.stage;           // "alpha" or "beta"
@@ -2200,6 +2201,17 @@ const commands = {
   synth() { commitEdits(); send("run", { kind: "synth" }); },
   fit() { commitEdits(); send("run", { kind: "fit" }); },
   stop() { send("cancel"); },
+  async quit() {
+    commitEdits();
+    await queue;
+    if (S.dirty && !(await confirmDialog("Quit without saving?", "The current setup has changes that are not saved.", "Quit"))) return;
+    if (!(await send("quit"))?.quitting) return;
+    ui.quit = true;
+    clearTimeout(pollTimer);
+    document.title = "PySME has quit";
+    document.body.replaceChildren(h("div", { class: "quit-page" },
+      h("h2", {}, "PySME has quit"), h("p", {}, "You can close this tab.")));
+  },
   settings() { showSettings().catch((e) => toast(e.message, "error")); },
   report() { showReport(); },
   themeAuto() { applyTheme("auto"); },
@@ -2493,7 +2505,7 @@ function wire() {
       }
     });
     window.addEventListener("beforeunload", (event) => {
-      if (window.hasUnsavedChanges()) event.preventDefault();
+      if (!ui.quit && window.hasUnsavedChanges()) event.preventDefault();
     });
   }
   new ResizeObserver(resizePlot).observe($(".plot-area"));

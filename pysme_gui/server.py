@@ -23,7 +23,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import FEEDBACK_EMAIL, ISSUE_REPO, __version__, envmanager, report
+from . import FEEDBACK_EMAIL, ISSUE_REPO, __version__, envmanager, instance, report
 from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
 
@@ -419,6 +419,7 @@ class App:
         self.jobs = JobManager(self.session, self.lock, self.log)
         self.updater = Updater(self.log)
         self.token = secrets.token_urlsafe(24)
+        self.on_quit = None             # set where the page may end the program
         self._options = None
         self.report_path = None
 
@@ -458,6 +459,7 @@ class App:
         state["log_seq"] = self.log.seq
         state["update"] = {"task": self.updater.state, "latest": self.updater.latest}
         state["release"] = {"version": __version__, "stage": envmanager.stage(__version__)}
+        state["can_quit"] = self.on_quit is not None
         return state
 
     # ------------------------------------------------------------------ routes
@@ -504,6 +506,11 @@ class App:
         raise KeyError(route)
 
     def post(self, route, body):
+        if route == "quit":
+            if self.on_quit is None:
+                raise UserError("This window is quit from its own menu.")
+            threading.Timer(0.3, self.on_quit).start()      # after this answer
+            return {"quitting": True}
         if route == "cancel":
             self.jobs.cancel()
             return self.state()
@@ -712,6 +719,18 @@ def main(argv=None):
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
+    # Opened again from the menu: show what runs. A file given to open gets an
+    # interface of its own, so that it never replaces unsaved work.
+    browser_version = not args.app_mode
+    if browser_version and not args.file and not args.port:
+        url = instance.running()
+        if url:
+            print(f"PYSME_GUI_URL {url}", flush=True)
+            print("PySME is already running; this shows it again.", flush=True)
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+
     app, server, url = create_server(args.port)
     if args.file:
         try:
@@ -735,14 +754,18 @@ def main(argv=None):
         threading.Thread(target=watch_parent, daemon=True).start()
 
     print(f"PYSME_GUI_URL {url}", flush=True)
-    if not args.app_mode:
-        print("Press Ctrl-C to quit.", flush=True)
+    if browser_version:
+        app.on_quit = stop              # the Mac app quits by its own menu
+        instance.register(url)
+        print("To quit: ⋯ → Quit PySME in the window, or Ctrl-C here.", flush=True)
         if not args.no_browser:
             webbrowser.open(url)
     try:
         server.serve_forever()
     finally:
         app.jobs.shutdown()
+        if browser_version:
+            instance.unregister(url)
         server.server_close()
 
 

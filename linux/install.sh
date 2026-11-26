@@ -44,8 +44,15 @@ export UV_PYTHON_INSTALL_DIR="$DATA/python" UV_CACHE_DIR="$DATA/cache"
 PYTHONDONTWRITEBYTECODE=1 "$UV" run --no-project --managed-python --python 3.12 \
     "$ROOT/pysme_gui/envmanager.py" install --source "$ROOT"
 
+cp "$ROOT/assets/pysme-icon.png" "$DATA/icon.png"      # stays if the download is removed
+
 cat > "$BIN/pysme-gui" <<LAUNCHER
 #!/bin/sh
+# The menu entry has no terminal: what would be printed there goes to a file.
+if [ "\${1:-}" = "--from-menu" ]; then
+    shift
+    exec >> "$DATA/pysme-gui.log" 2>&1
+fi
 export PYSME_GUI_HOME="$DATA" PYSME_GUI_UV="$UV"
 export UV_PYTHON_INSTALL_DIR="$DATA/python" UV_CACHE_DIR="$DATA/cache"
 value() { [ -f "\$2" ] && sed -n "s/.*\"\$1\": *\"\([^\"]*\)\".*/\1/p" "\$2" | head -n 1; }
@@ -62,12 +69,13 @@ cat > "$APPS/pysme-gui.desktop" <<DESKTOP
 Type=Application
 Name=PySME
 Comment=Spectroscopy Made Easy
-Exec=$BIN/pysme-gui %f
-Icon=$ROOT/assets/pysme_logo-ver-light.png
-Terminal=true
+Exec="$BIN/pysme-gui" --from-menu %f
+Icon=$DATA/icon.png
+Terminal=false
 Categories=Science;Education;
 DESKTOP
 
 echo
 echo "Done. Start it from the applications menu or run: $BIN/pysme-gui"
-echo "It opens in your web browser; close the terminal window to quit."
+echo "It opens in your web browser. To quit: ⋯ → Quit PySME. Closing the tab leaves"
+echo "it running, and starting PySME again shows it as you left it."
