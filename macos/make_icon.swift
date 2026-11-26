@@ -27,29 +27,15 @@ func render(_ pixels: Int) -> Data {
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     let tile = CGRect(x: size * 0.098, y: size * 0.098, width: size * 0.804, height: size * 0.804)
     context.addPath(CGPath(roundedRect: tile, cornerWidth: size * 0.18, cornerHeight: size * 0.18, transform: nil))
-    context.setFillColor(CGColor(red: 0.99, green: 0.98, blue: 0.96, alpha: 1))
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     context.fillPath()
 
-    // Recolour the black emblem in the interface's accent orange.
+    // The logo as it is: its emblem, in its own black, on white.
     let box = size * 0.58
     let ratio = CGFloat(emblem.width) / CGFloat(emblem.height)
-    // Whole pixels: half-covered edge pixels would leave a faint coloured frame.
-    let target = CGRect(x: (size - box * ratio) / 2, y: (size - box) / 2, width: box * ratio, height: box).integral
-    // Colour it on white first, then multiply onto the tile, so that the white
-    // around the emblem leaves no visible box.
-    context.saveGState()
-    context.setBlendMode(.multiply)
-    context.beginTransparencyLayer(in: target, auxiliaryInfo: nil)
-    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    context.fill(target)
-    context.setBlendMode(.multiply)
     context.interpolationQuality = .high
-    context.draw(emblem, in: target)
-    context.setBlendMode(.screen)
-    context.setFillColor(CGColor(red: 0.80, green: 0.31, blue: 0.11, alpha: 1))
-    context.fill(target)
-    context.endTransparencyLayer()
-    context.restoreGState()
+    context.draw(emblem, in: CGRect(x: (size - box * ratio) / 2, y: (size - box) / 2,
+                                    width: box * ratio, height: box))
 
     let rep = NSBitmapImageRep(cgImage: context.makeImage()!)
     return rep.representation(using: .png, properties: [:])!

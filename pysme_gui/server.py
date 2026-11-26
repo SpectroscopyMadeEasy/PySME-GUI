@@ -157,6 +157,12 @@ class Updater:
             any(e["selected"] and not e["running"] for e in environments)
             or not _inside(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
         )
+        custom = envmanager.settings().get("python")
+        custom_pysme = envmanager.settings().get("python_pysme")
+        if custom:
+            restart = not same_program(sys.executable, custom)
+        elif not managed and envmanager.env_info(envmanager.selection()[1]):
+            restart = True          # the user has just gone back to the app's own PySME
         return {
             "gui": __version__,
             "gui_selected": constants["version"],
@@ -165,7 +171,11 @@ class Updater:
             "python": sys.executable,
             "python_version": sys.version.split()[0],
             "managed": managed,
-            "custom_python": envmanager.settings().get("python"),
+            "custom_python": custom,
+            "custom_pysme": custom_pysme,
+            "custom_supported": (
+                envmanager.supports(constants, custom_pysme) if custom_pysme else None
+            ),
             "home": envmanager.app_home(),
             "source": os.environ.get(envmanager.SOURCE_ENV)
             or f"release tags of {envmanager.update_repository()}",
@@ -290,37 +300,84 @@ class Updater:
             raise UserError(str(exc))
 
 
-def set_custom_python(path):
-    """Use another interpreter (with its own PySME) from the next start on."""
-    chosen = envmanager.settings()
+def same_program(first, second):
+    """True if two paths name the same Python.
+
+    The folders may be reached through links (macOS rewrites /private/tmp as
+    /tmp). The last link is not followed: the "python" of two environments often
+    points at one base interpreter.
+    """
+    def where(path):
+        folder, name = os.path.split(os.path.abspath(path))
+        return os.path.join(os.path.realpath(folder), name)
+
+    return where(first) == where(second)
+
+
+def _next_interface():
+    """The folder holding the interface code that will run after a restart."""
+    if is_managed():
+        gui_id = envmanager.selection()[0]
+        if envmanager.gui_info(gui_id):
+            return envmanager.gui_dir(gui_id)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def set_custom_python(path, accept_unsupported=False):
+    """Use a Python with the user's own PySME from the next start on.
+
+    It is only stored if the interface starts with it. A PySME outside the
+    supported range (a development build can be) is stored only when the user
+    confirms. Returns what was found, or None when the setting was cleared.
+    """
+    path = (path or "").strip()
+    if len(path) > 1 and path[0] == path[-1] and path[0] in "'\"":
+        path = path[1:-1].strip()
     if not path:
-        chosen.pop("python", None)
-        envmanager.write_settings(chosen)
+        envmanager.change_settings(remove=("python", "python_pysme"))
         return None
-    path = os.path.expanduser(path)
+    path = os.path.abspath(os.path.expanduser(path)) if os.sep in path else path
+    if os.path.isdir(path):
+        inside = os.path.join(path, "bin", "python")
+        hint = f" Did you mean {inside}?" if os.path.isfile(inside) else ""
+        raise UserError(f"That is a folder; enter the Python program inside it.{hint}")
     if not os.path.isfile(path) or not os.access(path, os.X_OK):
-        raise UserError(f"Not an executable Python: {path}")
+        raise UserError(f"Not an executable Python: {path}. Enter its full path.")
+
+    interface = _next_interface()
+    env = envmanager.uv_environment()                 # without the caller's Python settings
+    env.update(PYTHONPATH=interface, PYTHONDONTWRITEBYTECODE="1", MPLBACKEND="Agg")
     try:
         probe = subprocess.run(
-            [path, "-c", "from pysme.smelib import _smelib; import pysme; "
-             "_smelib.LibraryVersion(); print('VERSION', pysme.__version__)"],
-            capture_output=True, text=True, timeout=90, cwd=os.path.expanduser("~"),
+            [path, "-c", envmanager.SMOKE_TEST], capture_output=True, text=True,
+            errors="replace", timeout=120, cwd=os.path.expanduser("~"), env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise UserError(f"Could not run it: {exc}")
-    if probe.returncode != 0:
+    found = [l for l in probe.stdout.splitlines() if l.startswith("SMOKE ")]
+    if probe.returncode != 0 or not found:
         last = (probe.stderr.strip().splitlines() or ["unknown error"])[-1]
-        raise UserError(f"That Python cannot run PySME: {last}")
-    version = [l for l in probe.stdout.splitlines() if l.startswith("VERSION ")][-1][8:]
-    chosen["python"] = path
-    envmanager.write_settings(chosen)
-    return version
+        raise UserError(f"PySME-GUI cannot start with that Python: {last}")
+    versions = json.loads(found[-1][6:])
+
+    constants = envmanager.package_constants(os.path.join(interface, "pysme_gui"))
+    result = {
+        "pysme": versions["pysme"], "smelib": versions["smelib"], "python": path,
+        "supported": envmanager.supports(constants, versions["pysme"]),
+        "range": envmanager.supported_text(constants),
+        "saved": False,
+    }
+    if result["supported"] or accept_unsupported:
+        # The check took a while; other settings may have changed meanwhile.
+        envmanager.change_settings(python=path, python_pysme=versions["pysme"])
+        result["saved"] = True
+    return result
 
 
 def set_theme(theme):
     if theme not in THEMES:
         raise UserError("Unknown appearance.")
-    envmanager.write_settings(dict(envmanager.settings(), theme=theme))
+    envmanager.change_settings(theme=theme)
 
 
 def index_page():
@@ -481,9 +538,9 @@ class App:
             set_theme(body.get("theme"))
             return {}
         if route == "settings/python":
-            version = set_custom_python(body.get("python"))
+            checked = set_custom_python(body.get("python"), bool(body.get("accept_unsupported")))
             result = self.updater.info()
-            result["custom_version"] = version
+            result["checked"] = checked
             return result
 
         extra = {}
@@ -572,10 +629,8 @@ def make_handler(app):
             if url.path.startswith("/api/"):
                 return self._api(lambda: app.get(url.path[5:], parse_qs(url.query)))
             if url.path == "/vendor/plotly.min.js":
-                import plotly
-
-                path = os.path.join(os.path.dirname(plotly.__file__), "package_data", "plotly.min.js")
-                return self._file(path, cache=True)
+                # The interface brings its own copy; PySME need not have Plotly.
+                return self._file(os.path.join(STATIC, "vendor", "plotly.min.js"), cache=True)
             if url.path in ("/", "/index.html"):
                 return self._send(200, index_page(), "text/html; charset=utf-8")
             name = url.path.lstrip("/")

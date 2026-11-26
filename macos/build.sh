@@ -3,6 +3,7 @@
 #
 #   macos/build.sh                      # result in dist/
 #   UV_BIN=/path/to/uv macos/build.sh   # bundle a specific uv
+#   SKIP_DMG=1 macos/build.sh           # the app only
 #
 # Needs the Xcode command line tools. The app bundles the GUI code and the "uv"
 # installer; Python and PySME are fetched on first launch.
@@ -67,16 +68,14 @@ codesign --force --sign "$IDENTITY" "$APP/Contents/Resources/bin/uv"
 codesign --force --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
 
-# 5. Disk image with the usual Applications shortcut.
-STAGE="$DIST/work/dmg"
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
+if [ "${SKIP_DMG:-}" = 1 ]; then
+    echo "App: $APP (no disk image: SKIP_DMG=1)"
+    exit 0
+fi
+
+# 5. Disk image: a small window with the app, an arrow and the Applications folder.
 DMG="$DIST/PySME-$VERSION-arm64.dmg"
-rm -f "$DMG"
-hdiutil create -quiet -volname "PySME $VERSION" -srcfolder "$STAGE" -format UDZO "$DMG"
-rm -rf "$STAGE"
+"$ROOT/macos/make_dmg.sh" "$APP" "$DIST/PySME.app/Contents/Resources/bin/uv" "PySME $VERSION" "$DMG"
 
 echo "App: $APP"
 echo "DMG: $DMG ($(du -h "$DMG" | awk '{print $1}'))"

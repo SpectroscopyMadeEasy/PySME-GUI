@@ -20,6 +20,9 @@ def prepare(sme, job):
     Returns the flags that were changed for this run only.
     """
     restore = {}
+    # Always computed normalised, which is what an observation is compared with.
+    # The continuum is kept, so the interface can show the flux without a new run.
+    sme.normalize_by_continuum = True
     if not job["has_obs"]:
         for name in ("synth", "cont", "spec", "uncs", "mask", "telluric"):
             setattr(sme, name, None)

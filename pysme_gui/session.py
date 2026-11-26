@@ -12,6 +12,7 @@ import time
 
 import numpy as np
 from pysme.abund import Abund
+from pysme.continuum_and_radial_velocity import apply_continuum
 from pysme.linelist.vald import ValdFile
 from pysme.sme import MASK_VALUES, SME_Structure
 
@@ -38,7 +39,7 @@ FLOAT_PARAMS = {
     "accwi": ("accwi", 0.0, True),
     "accrt": ("accrt", 0.0, True),
 }
-BOOL_PARAMS = {"h2broad", "normalize_by_continuum"}
+BOOL_PARAMS = {"h2broad"}
 CHOICE_PARAMS = {
     "vrad_flag": ["none", "fix", "whole", "each"],
     "cscale_flag": ["none", "fix", "constant", "linear", "quadratic"],
@@ -98,8 +99,7 @@ def default_sme():
     sme = SME_Structure()
     sme.teff, sme.logg, sme.monh = 5770.0, 4.44, 0.0
     sme.vmic, sme.vmac, sme.vsini = 1.0, 0.0, 0.0
-    sme.atmo.source = "marcs2012.sav"
-    sme.atmo.method = "grid"
+    # The model atmosphere grid is PySME's own default; the interface does not choose one.
     return sme
 
 
@@ -146,6 +146,7 @@ class Session:
         self.runs = []
         self._run_counter = 0
         self.synth_stale = False
+        self.synth_correction = None   # continuum correction inside that spectrum
         self.computed_with = None  # versions that produced the current spectrum
         self.fit_info = None
         self.notes = []
@@ -196,6 +197,10 @@ class Session:
         meta = sme.meta or {}
         setup = meta.get("gui_synth_setup")
         self.synth_stale = bool(meta.get("gui_synth_stale", False))
+        if "gui_synth_continuum" in meta:
+            self.synth_correction = meta["gui_synth_continuum"]
+        else:
+            self.synth_correction = self._applied_continuum(sme, sme.spec is not None)
         used = meta.get("gui_computed_with")
         if isinstance(used, dict) and {"gui", "pysme", "smelib"} <= set(used):
             self.computed_with = dict(used)
@@ -663,6 +668,7 @@ class Session:
                 f"The spectrum has {total} pixels, too many to plot. Choose wavelength "
                 "windows under Star > Wavelength."
             )
+        both = self._both_scales()
         for i in range(len(sme.wave)):
             segment = {"wave": np.asarray(sme.wave[i])}
             if self.obs is not None and sme.spec is not None:
@@ -671,10 +677,58 @@ class Session:
                     segment["uncs"] = np.asarray(sme.uncs[i])
                 if sme.mask is not None:
                     segment["mask"] = np.asarray(sme.mask[i]).astype(int)
-            if sme.synth is not None and len(sme.synth[i]) == len(segment["wave"]):
-                segment["synth"] = np.asarray(sme.synth[i])
+            if both:
+                for name, values in zip(("synth", "flux"), both[i]):
+                    if values is not None:
+                        segment[name] = values
             segments.append(segment)
         return clean({"segments": segments})
+
+    @staticmethod
+    def _applied_continuum(sme, observed):
+        """The continuum correction that is inside a spectrum just computed.
+
+        PySME multiplies it into the synthetic spectrum but not into the continuum.
+        Without an observation, or with the correction off, there is none, even if
+        coefficients from an earlier run are still stored.
+        """
+        if not observed or sme.cscale_flag == "none" or sme.cscale is None or sme.wave is None:
+            return None
+        return {
+            "type": str(sme.cscale_type),
+            "coeffs": [np.asarray(sme.cscale[i], float).tolist() for i in range(len(sme.wave))],
+        }
+
+    def _both_scales(self):
+        """(normalised, flux at the stellar surface) of the synthesis, per segment.
+
+        Both come from one run: PySME keeps the continuum it divided by. Either
+        is None where the stored structure does not allow it.
+        """
+        sme = self.sme
+        if sme.synth is None or sme.wave is None:
+            return None
+        pairs = []
+        for i in range(len(sme.wave)):
+            wave = np.asarray(sme.wave[i], float)
+            synth = np.asarray(sme.synth[i], float)
+            if len(synth) != len(wave):
+                pairs.append((None, None))
+                continue
+            cont = None if sme.cont is None else np.asarray(sme.cont[i], float)
+            if cont is not None and len(cont) != len(wave):
+                cont = None
+            factor = np.ones(len(wave))
+            if self.synth_correction:
+                coeffs = np.asarray(self.synth_correction["coeffs"][i], float)
+                apply_continuum([wave], [factor], [wave], [coeffs], self.synth_correction["type"], [0])
+            if sme.normalize_by_continuum:
+                pairs.append((synth, None if cont is None else synth * cont / factor))
+            else:
+                # Only in files made elsewhere; the interface computes normalised.
+                flux = synth / factor
+                pairs.append((None if cont is None else flux / cont, flux))
+        return pairs
 
     def run_spectrum(self, run_id):
         for run in self.runs:
@@ -712,15 +766,17 @@ class Session:
     def strong_lines(self, wmin, wmax, limit=30):
         if len(self.sme.linelist) == 0:
             return {"lines": []}
-        frame = self.sme.linelist._lines
-        frame = frame[(frame["wlcent"] >= wmin) & (frame["wlcent"] <= wmax)]
+        full = self.sme.linelist._lines
+        inside = ((full["wlcent"] >= wmin) & (full["wlcent"] <= wmax)).to_numpy()
+        # "_row" is the line's position in the unfiltered table of the Line list tab.
+        frame = full[inside].assign(_row=np.flatnonzero(inside))
         if "depth" in frame.columns:
             frame = frame.sort_values("depth", ascending=False)
         else:
             frame = frame.sort_values("gflog", ascending=False)
         frame = frame.head(limit)
         return clean({"lines": [
-            {"wave": r["wlcent"], "species": str(r["species"]),
+            {"wave": r["wlcent"], "species": str(r["species"]), "row": int(r["_row"]),
              "depth": r["depth"] if "depth" in frame.columns else None}
             for _, r in frame.iterrows()
         ]})
@@ -739,6 +795,7 @@ class Session:
         meta["gui_linelist_file"] = self.linelist_file
         meta["gui_fit_info"] = self.fit_info
         meta["gui_synth_stale"] = self.synth_stale
+        meta["gui_synth_continuum"] = self.synth_correction
         meta["gui_computed_with"] = self.computed_with
         meta["gui_synth_setup"] = (
             {"ranges": self.ranges, "step": self.step} if self.obs is None else None
@@ -786,8 +843,15 @@ class Session:
             if self.has_uncs:
                 columns.append(("uncertainty", sme.uncs))
             columns.append(("mask", sme.mask))
-        if sme.synth is not None:
-            columns.append(("synth", sme.synth))
+        # Both scales, whichever of them the plot happens to show.
+        both = self._both_scales()
+        surface = None
+        if both:
+            if all(normalised is not None for normalised, _ in both):
+                columns.append(("synth", [normalised for normalised, _ in both]))
+            if all(flux is not None for _, flux in both):
+                surface = [flux for _, flux in both]
+                columns.append(("synth_surface_flux", surface))
         columns = [(n, v) for n, v in columns if v is not None]
         if len(columns) < 2:
             raise UserError("Synthesize or import a spectrum first.")
@@ -797,6 +861,11 @@ class Session:
             buffer.write(
                 f"# synth computed with PySME {used['pysme']}, SMElib {used['smelib']}, "
                 f"PySME-GUI {used['gui']}\n"
+            )
+        if surface is not None:
+            buffer.write(
+                "# synth_surface_flux: model flux at the stellar surface, erg s^-1 cm^-2 A^-1, "
+                "not scaled by radius or distance, without the continuum correction\n"
             )
         if self.synth_stale and sme.synth is not None:
             buffer.write("# WARNING: parameters changed after 'synth' was computed\n")
@@ -877,6 +946,7 @@ class Session:
         result.fitparameters = names
         self.sme = result
         self.synth_stale = False
+        self.synth_correction = self._applied_continuum(result, self.obs is not None)
         self.computed_with = software_versions()
         if kind == "fit":
             self.fit_info = self._read_fit_results(result, initial)
@@ -912,10 +982,13 @@ class Session:
         label = (
             f"#{self._run_counter} {kind}  {sme.teff:.0f} / {sme.logg:.2f} / {sme.monh:+.2f}"
         )
-        segments = [
-            {"wave": np.array(sme.wave[i]), "synth": np.array(sme.synth[i])}
-            for i in range(len(sme.wave))
-        ]
+        segments = []
+        for i, (normalised, flux) in enumerate(self._both_scales()):
+            segment = {"wave": np.array(sme.wave[i])}
+            for name, values in (("synth", normalised), ("flux", flux)):
+                if values is not None:
+                    segment[name] = np.array(values)
+            segments.append(segment)
         self.runs.append({
             "id": self._run_counter, "label": label, "kind": kind,
             "time": time.strftime("%H:%M:%S"), "segments": segments,

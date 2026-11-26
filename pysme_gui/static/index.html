@@ -9,7 +9,10 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Py<span>SME</span></div>
+    <div class="brand">
+      <img class="on-light" src="wordmark-on-light.png" alt="PySME">
+      <img class="on-dark" src="wordmark-on-dark.png" alt="PySME">
+    </div>
     <div class="group">
       <button id="btn-new" data-cmd="new" title="Start an empty setup">New</button>
       <button id="btn-open" data-cmd="open" title="Open an .sme or IDL .inp file (⌘O)">Open…</button>
@@ -74,6 +77,12 @@
             <p class="hint" id="ip-hint"></p>
             <h3>Wavelength</h3>
             <div id="wavelength"></div>
+            <h3>Synthetic spectrum</h3>
+            <div class="segmented" id="flux-scale" role="group" aria-label="Flux scale of the synthetic spectrum">
+              <button type="button" data-normalised="true">Normalised</button>
+              <button type="button" data-normalised="false">Not normalised</button>
+            </div>
+            <p class="hint" id="flux-hint"></p>
           </section>
 
           <section data-panel="model" hidden>
@@ -107,9 +116,7 @@
                 <label title="Line opacity screening threshold">accrt</label><input type="number" data-param="accrt" step="0.0001">
                 <label>μ angles</label><input type="number" data-param="nmu" step="1" min="1" max="77">
                 <label title="Scaling of van der Waals damping">γ6 factor</label><input type="number" data-param="gam6" step="0.1">
-                <label>H₂ broadening</label><input type="checkbox" data-param="h2broad">
-                <label>Normalise by continuum</label><input type="checkbox" data-param="normalize_by_continuum">
-              </div>
+                <label>H₂ broadening</label><input type="checkbox" data-param="h2broad">              </div>
             </details>
           </section>
 
@@ -149,7 +156,7 @@
             <div id="snr-block" hidden>
               <h3>Uncertainties</h3>
               <div class="grid wide">
-                <label>Assumed S/N</label><input type="number" data-param="snr" step="10" min="1" aria-label="Assumed signal to noise">
+                <label>Assumed S/N</label><input type="number" data-param="snr" step="10" min="10" aria-label="Assumed signal to noise">
               </div>
               <p class="hint">The observation has no uncertainty column.</p>
             </div>
@@ -177,6 +184,8 @@
       <div class="banner" id="banner" hidden></div>
       <div class="plot-area">
         <div id="plot"></div>
+        <div id="crosshair" hidden></div>
+        <div id="readout" hidden></div>
         <div class="empty" id="empty">
           <div id="empty-start">
             <h2>Synthesize or fit a spectrum</h2>

@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import uuid
@@ -73,11 +74,19 @@ def _read_json(path, default):
 
 
 def _write_text(path, text):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    temp = path + ".tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    os.replace(temp, path)
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    # A temporary file of its own for every write: two requests may write at once.
+    handle, temp = tempfile.mkstemp(dir=folder, prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.chmod(temp, 0o644)
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.remove(temp)
+        raise
 
 
 def _write_json(path, data):
@@ -90,6 +99,19 @@ def settings():
 
 def write_settings(data):
     _write_json(os.path.join(app_home(), "settings.json"), data)
+
+
+_settings_lock = threading.Lock()
+
+
+def change_settings(remove=(), **values):
+    """Change some settings and keep the others, even when requests overlap."""
+    with _settings_lock:
+        data = settings()
+        data.update(values)
+        for key in remove:
+            data.pop(key, None)
+        write_settings(data)
 
 
 def _new_id():
@@ -146,7 +168,7 @@ def channel():
 def set_channel(name):
     if name not in CHANNELS:
         raise RuntimeError(f"Unknown update channel: {name}")
-    write_settings(dict(settings(), channel=name))
+    change_settings(channel=name)
 
 
 def _constant(text, name):
@@ -351,7 +373,7 @@ def _freeze(uv, python, env):
     return result.stdout
 
 
-_SMOKE_TEST = (
+SMOKE_TEST = (
     "import json, platform, pysme, pysme_gui, pysme_gui.server\n"
     "from pysme.smelib import _smelib\n"
     "print('SMOKE ' + json.dumps({'pysme': pysme.__version__, "
@@ -365,7 +387,7 @@ def smoke_test(gui_id, python, log):
     env = uv_environment()
     env["PYTHONPATH"] = gui_dir(gui_id)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    output = _run([python, "-c", _SMOKE_TEST], log, env, cwd=app_home())
+    output = _run([python, "-c", SMOKE_TEST], log, env, cwd=app_home())
     line = next(line for line in output if line.startswith("SMOKE "))
     return json.loads(line[6:])
 

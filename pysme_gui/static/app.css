@@ -14,7 +14,6 @@
   --grid: #e8e7e2;
   --m-line: #2a78d6;
   --m-cont: #1baf7a;
-  --m-bad: #e34948;
   --warn-bg: #fff4d6;
   --warn-text: #6b4a00;
   --err: #c22f2e;
@@ -122,11 +121,25 @@ fieldset:disabled { opacity: 0.6; }
   border-bottom: 1px solid var(--border);
   flex: none;
 }
-.brand { font-weight: 800; font-size: 16px; letter-spacing: -0.02em; }
-.brand span { color: var(--synth); }
+/* The wordmark cut from the PySME logo in assets/, letter shapes unchanged, with
+   "SME" in the accent colour (--synth of each theme); "Py" is black on light and
+   white on dark. */
+/* The picture includes the tail of the "y", so centring it would lift the
+   letters above the button labels; 2.5px down centres the capitals instead. */
+.brand img { display: block; height: 21px; position: relative; top: 2.5px; }
+.brand .on-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand .on-dark { display: block; }
+  :root:not([data-theme="light"]) .brand .on-light { display: none; }
+}
+:root[data-theme="dark"] .brand .on-dark { display: block; }
+:root[data-theme="dark"] .brand .on-light { display: none; }
 .group { display: flex; gap: 5px; align-items: center; }
 .spacer { flex: 1; }
 .job { color: var(--muted); font-variant-numeric: tabular-nums; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job.running { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.job .job-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.job .spinner { flex: none; width: 18px; height: 18px; border-width: 2.5px; margin: 0 10px 0 0; }
 .job.ok { color: var(--ok); }
 .job.failed { color: var(--err); cursor: pointer; text-decoration: underline; }
 .spinner {
@@ -201,12 +214,26 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom:
 .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .swatch.line { background: var(--m-line); }
 .swatch.cont { background: var(--m-cont); }
-.swatch.bad { background: var(--m-bad); }
+.swatch.bad { border: 1.5px solid currentColor; opacity: 0.6; }   /* excluded: an empty box, no strip */
 .check, .inline { display: flex; align-items: center; gap: 5px; color: var(--muted); }
 .inline select { max-width: 270px; color: var(--text); }
 .banner { margin: 0 12px 6px; padding: 5px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); flex: none; }
-.plot-area { flex: 1; position: relative; min-height: 160px; margin: 0 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-#plot { position: absolute; inset: 0; }
+#crosshair { position: absolute; top: 0; left: 0; width: 1px; margin-left: -0.5px; background: var(--muted); pointer-events: none; will-change: transform; z-index: 2; }
+/* The values under the pointer: one line in a fixed place above the plot. */
+#readout { position: absolute; top: 0; left: 0; right: 0; height: 24px; padding: 4px 14px 0 58px; display: flex; gap: 18px; align-items: center; overflow: hidden; white-space: nowrap; pointer-events: none; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+#readout > div { display: flex; align-items: center; flex: none; }
+#readout i { display: inline-block; width: 18px; height: 2px; margin-right: 6px; }
+#readout span:last-child { min-width: 7ch; }
+#readout span.name { min-width: 0; margin-right: 6px; color: var(--muted); }
+.plot-area { flex: 1; position: relative; min-height: 180px; margin: 0 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; container-type: inline-size; }
+/* a narrow plot: the same line, packed closer */
+@container (max-width: 720px) {
+  #readout { gap: 8px; padding: 4px 8px 0; font-size: 12px; }
+  #readout i { width: 10px; margin-right: 4px; }
+  #readout span:last-child { min-width: 6ch; }
+  #readout span.name { min-width: 0; margin-right: 3px; }
+}
+#plot { position: absolute; top: 22px; right: 0; bottom: 0; left: 0; }
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; overflow: auto; justify-content: safe center; }
 .empty h2 { margin: 0 0 4px; }
 .empty p { color: var(--muted); margin: 0 0 14px; }
@@ -227,6 +254,9 @@ th { color: var(--muted); font-weight: 600; font-size: 11px; position: sticky; t
 th:first-child, td:first-child { text-align: left; }
 #line-table tbody tr { cursor: pointer; }
 #line-table tbody tr:hover { background: var(--surface-2); }
+/* the line whose label was clicked in the plot */
+#line-table tbody tr.chosen { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+#line-table tbody tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .results-layout { display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap; }
 .results-main { flex: 2 1 460px; min-width: 0; }
 .results-runs { flex: 1 1 230px; }
@@ -260,6 +290,12 @@ dialog[open] { display: flex; flex-direction: column; }
 dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .dialog-head { display: flex; justify-content: space-between; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--border); }
 .dialog-head h2 { margin: 0; font-size: 15px; }
+.dialog-head button.ghost { font-size: 20px; line-height: 1; padding: 4px 9px; margin-right: -6px; }
+/* Plotly's notice has its own close "button"; keep the interface's button styles
+   off it, or hovering puts a box behind the cross that does not fit it. */
+.plotly-notifier .notifier-close,
+.plotly-notifier button.notifier-close:hover:not(:disabled) { background: transparent; border: 0; border-radius: 0; color: #fff; }
+.plotly-notifier button.notifier-close:hover:not(:disabled) { opacity: 1; }
 /* "flex: 1" would start the body at zero height, and WebKit (the Mac app) then
    leaves it there: the dialog shows only its title and buttons. */
 .dialog-body { padding: 12px 16px; overflow: auto; flex: 1 1 auto; min-height: 0; }
@@ -267,6 +303,11 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .dialog-foot input[type="text"] { flex: 1; }
 .report textarea { width: 100%; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .report textarea.report-text { font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
+details.advanced { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; }
+details.advanced > summary { cursor: pointer; color: var(--muted); }
+details.advanced[open] > summary { margin-bottom: 4px; }
+.command { display: flex; gap: 10px; align-items: center; margin: 4px 0; }
+.command code { flex: 1; overflow-x: auto; white-space: nowrap; font: 12px ui-monospace, Menlo, Consolas, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 .versions { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
 .versions li { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; padding: 8px 12px; }
 .versions li + li { border-top: 1px solid var(--border); }

@@ -138,9 +138,10 @@ def test_synthesis_then_fit_recovers_injected_value(app, tmp_path):
 
     csv = session.export_csv(str(tmp_path / "out"))
     with open(csv) as handle:
-        versions, header = handle.readline(), handle.readline().strip()
+        versions, units, header = handle.readline(), handle.readline(), handle.readline().strip()
     assert versions.startswith("# synth computed with PySME ")
-    assert header == "segment,wave,flux_obs,uncertainty,mask,synth"
+    assert units.startswith("# synth_surface_flux: ")
+    assert header == "segment,wave,flux_obs,uncertainty,mask,synth,synth_surface_flux"
 
     session.revert_fit()
     assert session.sme.monh == 0.0 and session.synth_stale
@@ -243,3 +244,13 @@ def test_abundance_fit_is_reported_on_the_synthesis_scale(app, tmp_path, free_mo
     assert session.sme.monh == pytest.approx(start_monh)
     assert session.sme.abund.A["Ca"] == pytest.approx(start_a)
     assert run(jobs, "fit")["state"] == "done", log.tail()
+
+
+def test_the_model_grid_is_the_one_pysme_starts_with():
+    from pysme.sme import SME_Structure
+
+    from pysme_gui.session import default_sme
+
+    ours, theirs = default_sme().atmo, SME_Structure().atmo
+    assert (ours.source, ours.method) == (theirs.source, theirs.method)
+    assert ours.source and ours.method == "grid"

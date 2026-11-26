@@ -82,7 +82,7 @@ let seenRevision = -1;
 let logSeq = 0;
 let pollTimer = null;
 let lastJobKey = "";
-const ui = { prereleases: false, installChoice: null, tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null };
+const ui = { prereleases: false, installChoice: null, ownDraft: null, advancedOpen: null, tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null, flux: false };
 
 /* All changes are sent one after another, so that "type a value, then press
    Synthesize" always reaches PySME in that order. */
@@ -175,15 +175,34 @@ function renderTop() {
   $("#update-dot").hidden = !(latest && (latest.pysme_new || latest.gui_newer));
 }
 
+/* The settings dialog is rebuilt while something installs. Starting the turn
+   where a clock says it should be keeps a new spinner in step with the old. */
+function spinner() {
+  const element = h("span", { class: "spinner" });
+  element.style.animationDelay = `-${Date.now() % 800}ms`;       // 800 ms per turn, see app.css
+  return element;
+}
+
 function renderJob() {
   const job = S.job;
   const node = $("#job");
-  node.className = "job";
+  node.className = job.state === "running" ? "job running" : "job";
   node.onclick = null;
-  node.replaceChildren();
+  // Rebuilding the line would restart the spinner at every progress message.
+  const spinning = job.state === "running" && node.firstElementChild?.classList.contains("spinner");
+  if (!spinning) node.replaceChildren();
   if (job.state === "running") {
     const title = job.kind === "fit" ? "Fitting" : "Synthesizing";
-    node.append(h("span", { class: "spinner" }), `${title} ${Math.floor(job.elapsed)} s · ${job.progress}`);
+    const text = `${title} ${Math.floor(job.elapsed)} s · ${job.progress}`;
+    if (!spinning) node.append(spinner(), h("span", { class: "job-text" }));
+    const words = node.lastElementChild;
+    words.textContent = text;
+    // Within one run the room for the text only grows: otherwise the spinner in
+    // front of it would jump back and forth with every new progress message.
+    // A width, not a minimum: in a narrow window it may still shrink to an ellipsis.
+    words.style.width = "auto";
+    words.dataset.widest = Math.max(Number(words.dataset.widest || 0), words.scrollWidth + 1);
+    words.style.width = `${words.dataset.widest}px`;
     node.title = job.progress;
   } else if (job.state === "done") {
     node.classList.add("ok");
@@ -232,22 +251,63 @@ function currentValue(name) {
 }
 
 let wavelengthKey = "";
+let synthRanges = [];         // the ranges as last entered, without an observation
+let stepFromServer;           // what the Step box was last filled with
+let sendCount = 0;
+
+/* Send what a box holds. Until its last change is answered the box is ahead of
+   the stored value, and writing an older answer into it would undo a step of the
+   up/down arrows. */
+function sendFrom(box, path, body, answered) {
+  const mine = String(++sendCount);
+  box.dataset.pending = mine;
+  send(path, body).then(() => {
+    if (box.dataset.pending !== mine) return;
+    delete box.dataset.pending;
+    answered();
+  });
+}
+
+function writeParam(input) {
+  const value = currentValue(input.dataset.param);
+  if (input.type === "checkbox") input.checked = Boolean(value);
+  else if (input.tagName === "SELECT") {
+    if (value !== null && ![...input.options].some((o) => o.value === String(value))) {
+      input.append(h("option", { value: String(value) }, String(value)));
+    }
+    input.value = String(value);
+  } else {
+    const text = String(typeof value === "number" ? Number(value.toPrecision(8)) : value ?? "");
+    if (input.value !== text) input.value = text;
+  }
+}
+
+/* Every synthesis gives both scales, so this only chooses what is shown. */
+const showingFlux = () => ui.flux && spectrum.segments.some((s) => s.flux);
+
+function renderFluxScale() {
+  for (const button of $$("#flux-scale button")) {
+    const on = (button.dataset.normalised === "false") === ui.flux;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  const hint = !ui.flux
+    ? ["Flux divided by the continuum."]
+    : ["Flux at the stellar surface, in erg s⁻¹ cm⁻² Å⁻¹. Not scaled by the star's radius or distance."];
+  if (ui.flux && !showingFlux()) hint.push("It appears once there is a synthesis.");
+  else if (ui.flux && S.observation) hint.push("The observation and residuals are hidden in this view.");
+  $("#flux-hint").textContent = hint.join(" ");
+}
 
 /* "force" also overwrites a field the user is in the middle of typing. */
 function renderForms(rebuild, force = false) {
   if (!rebuild) return;
   for (const input of $$("[data-param]")) {
-    if (!force && input.dataset.editing && input === document.activeElement) continue;
+    if (!force && (input.dataset.pending || (input.dataset.editing && input === document.activeElement))) continue;
     delete input.dataset.editing;
-    const value = currentValue(input.dataset.param);
-    if (input.type === "checkbox") input.checked = Boolean(value);
-    else if (input.tagName === "SELECT") {
-      if (value !== null && ![...input.options].some((o) => o.value === String(value))) {
-        input.append(h("option", { value: String(value) }, String(value)));
-      }
-      input.value = String(value);
-    } else input.value = typeof value === "number" ? Number(value.toPrecision(8)) : value ?? "";
+    writeParam(input);
   }
+  renderFluxScale();
   $("#vrad-input").disabled = S.params.vrad_flag === "none";
   $("#snr-block").hidden = !(S.observation && !S.observation.has_uncs);
   const ip = S.params.iptype;
@@ -256,11 +316,12 @@ function renderForms(rebuild, force = false) {
     : "R = 0: no instrumental broadening.";
   // Only rebuilt when its content changed, so that unrelated updates never
   // throw away a half-typed range.
-  const key = JSON.stringify([S.setup, S.observation, S.observation && S.segments]);
+  const key = JSON.stringify([S.setup.ranges, S.observation, S.observation && S.segments]);
   if (force || key !== wavelengthKey) {
     wavelengthKey = key;
     renderWavelength();
   }
+  writeStep(force);
   renderLinelistCard();
   renderFitChips();
 }
@@ -299,27 +360,51 @@ function rangeRows(container, ranges, onCommit) {
   container.append(rows, h("button", { type: "button", onclick: () => add() }, "+ range"));
 }
 
+/* The Step box stays the same element as long as there is no observation. In
+   the Mac app the arrows of a replaced number box do nothing until the mouse has
+   moved. */
+function synthSetupControls() {
+  const step = h("input", {
+    type: "number", step: "0.01", min: "0", id: "synth-step", placeholder: "adaptive", "aria-label": "Wavelength step",
+    onchange: () => {
+      // Without a range there is nothing to store the step with yet.
+      if (synthRanges.length) sendFrom(step, "synthsetup", { ranges: synthRanges, step: step.value }, () => writeStep(false));
+    },
+    onkeydown: (event) => { if (event.key === "Enter") step.blur(); },
+  });
+  stepFromServer = undefined;
+  return [h("div", { id: "synth-ranges" }), h("div", { class: "grid", style: "margin-top:8px" },
+    h("label", { title: "Leave empty to let PySME choose an adaptive grid" }, "Step"), step, h("span", {}, "Å"))];
+}
+
+/* Written only when PySME has another value than last time, so that a step typed
+   before the first range stays. "force" restores what PySME really has. */
+function writeStep(force) {
+  const box = $("#synth-step");
+  if (!box || (!force && box.dataset.pending)) return;
+  const value = S.setup.step ?? null;
+  if (!force && value === stepFromServer) return;
+  if (force && value === null && !synthRanges.length) return;
+  stepFromServer = value;
+  if (value === null) box.value = "";
+  else if (box.value === "" || Number(box.value) !== value) box.value = String(value);
+}
+
 function renderWavelength() {
   const box = $("#wavelength");
-  box.replaceChildren();
   const obs = S.observation;
   if (!obs) {
-    let step = S.setup.step;
-    let ranges = S.setup.ranges;
-    const commit = () => send("synthsetup", { ranges, step });
-    rangeRows(box, ranges, (value) => { ranges = value; commit(); });
-    box.append(h("div", { class: "grid", style: "margin-top:8px" },
-      h("label", { title: "Leave empty to let PySME choose an adaptive grid" }, "Step"),
-      h("input", {
-        type: "number", step: "0.01", min: "0", value: step ?? "", placeholder: "adaptive", "aria-label": "Wavelength step",
-        onchange: (event) => {
-          step = event.target.value;
-          if (ranges.length) commit();
-        },
-      }),
-      h("span", {}, "Å")));
+    if (!$("#synth-step")) box.replaceChildren(...synthSetupControls());
+    synthRanges = S.setup.ranges;
+    const rangesBox = $("#synth-ranges");
+    rangesBox.replaceChildren();
+    rangeRows(rangesBox, synthRanges, (value) => {
+      synthRanges = value;
+      send("synthsetup", { ranges: value, step: $("#synth-step").value });
+    });
     return;
   }
+  box.replaceChildren();
   box.append(h("p", { class: "hint" },
     `Taken from the observation: ${obs.used.toLocaleString()} of ${obs.npix.toLocaleString()} pixels in ${S.segments.length} segment(s).`));
   box.append(h("p", { class: "hint" }, "Windows restrict what is computed and fitted:"));
@@ -399,10 +484,20 @@ const SLOW_LIMIT = 60000;
 let plotKey = "";
 let lineTimer = null;
 let currentLines = [];
+let linesBelongTo = "";       // the plot (see plotKey) those labels were chosen for
+
+/* The labels as Plotly wants them, in the colours of the theme now shown. */
+const lineAnnotations = (lines) => lines.map((line) => ({
+  x: line.wave, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: line.species,
+  textangle: -90, showarrow: false, font: { size: 10, color: css("--muted") },
+  hovertext: `${line.species} ${line.wave.toFixed(3)} Å<br>click: show in line list`,
+  captureevents: true,
+}));
 
 function maskStrips(segment) {
   // Contiguous runs of equal mask value, drawn as a thin strip under the data.
-  const colours = { 0: css("--m-bad"), 1: css("--m-line"), 2: css("--m-cont") };
+  // Excluded pixels (0) get no strip: they show as a gap.
+  const colours = { 1: css("--m-line"), 2: css("--m-cont") };
   const shapes = [];
   const { wave, mask } = segment;
   if (!mask) return shapes;
@@ -413,7 +508,7 @@ function maskStrips(segment) {
       const key = value === 0 ? 0 : value & 2 ? 2 : 1;
       const left = start === 0 ? wave[0] : (wave[start - 1] + wave[start]) / 2;
       const right = i === mask.length ? wave[i - 1] : (wave[i - 1] + wave[i]) / 2;
-      shapes.push({
+      if (key !== 0) shapes.push({
         type: "rect", xref: "x", yref: "y domain", x0: left, x1: right, y0: 0, y1: 0.025,
         fillcolor: colours[key], opacity: key === 1 ? 0.55 : 0.95, line: { width: 0 },
       });
@@ -424,12 +519,18 @@ function maskStrips(segment) {
 }
 
 function buildPlot() {
-  const segments = spectrum.segments;
+  const surface = showingFlux();
+  // An observation is on another scale, so the surface flux is shown as the model alone.
+  const onScale = (list) => (surface ? list.map((s) => ({ wave: s.wave, synth: s.flux })) : list);
+  const segments = onScale(spectrum.segments);
+  const earlier = compareData ? onScale(compareData.segments).filter((s) => s.synth) : [];
   const total = segments.reduce((n, s) => n + s.wave.length, 0);
   const type = total > SLOW_LIMIT ? "scattergl" : "scatter";
   const hasObs = segments.some((s) => s.obs);
   const hasSynth = segments.some((s) => s.synth);
   const showResid = hasObs && hasSynth && $("#show-resid").checked;
+  const fluxTitle = surface ? "Surface flux (erg s⁻¹ cm⁻² Å⁻¹)" : "Normalised flux";
+  const bigNumbers = surface ? { exponentformat: "power", showexponent: "all" } : {};
   const stepped = hasObs ? "hvh" : "linear";
   const traces = [];
   const shapes = [];
@@ -439,19 +540,17 @@ function buildPlot() {
     first[key] = false;
   };
 
-  if (compareData) {
-    for (const seg of compareData.segments) {
-      add("comp", {
-        x: seg.wave, y: seg.synth, name: compareData.label,
-        line: { color: css("--compare"), width: 1.2 }, hovertemplate: "%{y:.4f}<extra>earlier</extra>",
-      });
-    }
+  for (const seg of earlier) {
+    add("comp", {
+      x: seg.wave, y: seg.synth, name: compareData.label,
+      line: { color: css("--compare"), width: 1.2 }, meta: "earlier",
+    });
   }
   for (const seg of segments) {
     if (seg.obs) {
       add("obs", {
         x: seg.wave, y: seg.obs, name: "observed",
-        line: { color: css("--obs"), width: 1, shape: stepped }, hovertemplate: "%{y:.4f}<extra>observed</extra>",
+        line: { color: css("--obs"), width: 1, shape: stepped }, meta: "observed",
       });
       shapes.push(...maskStrips(seg));
     }
@@ -459,14 +558,14 @@ function buildPlot() {
       add("synth", {
         x: seg.wave, y: seg.synth, name: S.synth_stale ? "synthetic (out of date)" : "synthetic",
         line: { color: css("--synth"), width: 1.6, shape: stepped, dash: S.synth_stale ? "dot" : "solid" },
-        hovertemplate: "%{y:.4f}<extra>synthetic</extra>",
+        meta: "synthetic",
       });
     }
     if (showResid && seg.obs && seg.synth) {
       traces.push({
         type, mode: "lines", x: seg.wave, y: seg.obs.map((v, i) => (v === null || seg.synth[i] === null ? null : v - seg.synth[i])),
         yaxis: "y2", showlegend: false, line: { color: css("--resid"), width: 1, shape: "hvh" },
-        hovertemplate: "%{y:.4f}<extra>obs − synth</extra>",
+        meta: "O − S",
       });
       if (seg.uncs) {
         for (const sign of [1, -1]) {
@@ -485,7 +584,7 @@ function buildPlot() {
   };
   // Leave room under the deepest line for the line labels and the mask strip.
   let low = Infinity, high = -Infinity;
-  for (const seg of [...segments, ...(compareData ? compareData.segments : [])]) {
+  for (const seg of [...segments, ...earlier]) {
     for (const values of [seg.obs, seg.synth]) {
       for (const v of values || []) {
         if (v === null) continue;
@@ -501,24 +600,30 @@ function buildPlot() {
     uirevision: plotKey,
     paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"), font: { color: css("--text") },
     margin: { l: 58, r: 14, t: 28, b: 40 },
+    separators: ".",          // no thousands comma: wavelengths read 6438.5
     showlegend: true,
     legend: { orientation: "h", x: 0, xanchor: "left", y: 1.0, yanchor: "bottom", font: { size: 11 } },
-    hovermode: "x unified",
+    hovermode: false,          // see wireCrosshair; line labels keep their own hover
     hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--border"), font: { color: css("--text") } },
     dragmode: ui.tool === "zoom" ? "zoom" : "select",
     selectdirection: "h",
     newselection: { line: { color: css("--muted") } },
-    xaxis: { ...axis, title: { ...axis.title, text: "Wavelength (Å)" }, anchor: showResid ? "y2" : "y", exponentformat: "none", tickformat: "" , hoverformat: ".4f" },
-    yaxis: { ...axis, title: { ...axis.title, text: S.params.normalize_by_continuum || hasObs ? "Normalised flux" : "Flux" }, domain: showResid ? [0.3, 1] : [0, 1], range: yRange },
+    xaxis: { ...axis, title: { ...axis.title, text: "Wavelength (Å)" }, showspikes: false, anchor: showResid ? "y2" : "y", exponentformat: "none", tickformat: "" , hoverformat: ".4f" },
+    // The other scale needs its own height; the wavelength zoom stays.
+    yaxis: { ...axis, ...bigNumbers, uirevision: `${plotKey}|${surface}`, title: { ...axis.title, text: fluxTitle }, domain: showResid ? [0.3, 1] : [0, 1], range: yRange },
     shapes,
+    // Redraw with the labels already there; without them they would vanish at every
+    // redraw, such as after each abundance change, until looked up again.
+    annotations: $("#show-lines").checked && linesBelongTo === plotKey ? lineAnnotations(currentLines) : [],
     selections: [],
     selectionrevision: S.revision,
   };
-  if (showResid) layout.yaxis2 = { ...axis, domain: [0, 0.23], title: { ...axis.title, text: "O − S" } };
+  if (showResid) layout.yaxis2 = { ...axis, ...bigNumbers, domain: [0, 0.23], title: { ...axis.title, text: "O − S" } };
   return { traces, layout };
 }
 
 function renderPlot() {
+  hideReadout();          // its numbers may belong to the curves being replaced
   const empty = !spectrum.segments.length;
   $("#empty").hidden = !empty;
   const ready = empty && !S.ready.synth.length;
@@ -542,6 +647,10 @@ function renderPlot() {
     if (isNew) {
       graph._pysmeReady = true;
       graph.on("plotly_selected", onSelected);
+      graph.on("plotly_clickannotation", (event) => {
+        const line = currentLines[event.index];
+        if (line) revealLine(line.row);
+      });
       graph.on("plotly_relayout", (event) => {
         if (Object.keys(event).some((k) => k.startsWith("xaxis"))) scheduleLineLabels();
       });
@@ -575,16 +684,11 @@ async function updateLineLabels() {
   for (const line of lines) {
     if (placed.every((p) => Math.abs(p.wave - line.wave) > spacing)) placed.push(line);
   }
-  const key = JSON.stringify(placed.map((p) => p.wave));
-  if (key === JSON.stringify(currentLines.map((p) => p.wave)) && graph.layout.annotations?.length === placed.length) return;
+  const key = (list) => JSON.stringify(list.map((p) => [p.wave, p.species, p.row]));
+  if (key(placed) === key(currentLines) && graph.layout.annotations?.length === placed.length) return;
   currentLines = placed;
-  Plotly.relayout(graph, {
-    annotations: placed.map((line) => ({
-      x: line.wave, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: line.species,
-      textangle: -90, showarrow: false, font: { size: 10, color: css("--muted") },
-      hovertext: `${line.species} ${line.wave.toFixed(3)} Å`,
-    })),
-  });
+  linesBelongTo = plotKey;
+  Plotly.relayout(graph, { annotations: lineAnnotations(placed) });
 }
 
 async function onSelected(event) {
@@ -602,7 +706,8 @@ function renderPlotSelectors() {
   $("#compare").replaceChildren(h("option", { value: "" }, "nothing"), ...S.runs.slice().reverse().map((r) =>
     h("option", { value: String(r.id) }, `${r.label}  (${r.time})`)));
   $("#compare").value = ui.compare === null ? "" : String(ui.compare);
-  const canMask = spectrum.segments.some((s) => s.obs);
+  $("#show-resid").disabled = showingFlux();
+  const canMask = !showingFlux() && spectrum.segments.some((s) => s.obs);
   for (const button of $$("#tools button")) {
     if (button.dataset.tool !== "zoom") button.disabled = !canMask;
   }
@@ -630,6 +735,7 @@ async function setCompare(id) {
     compareData = { ...data, label: S.runs.find((r) => r.id === id).label };
   }
   renderPlot();
+  if (ui.drawer === "results") renderResults();     // its button says Overlay or Hide
 }
 
 /* ------------------------------------------------------------------- drawer */
@@ -691,20 +797,52 @@ function renderResults() {
   box.replaceChildren(h("div", { class: "results-layout" }, main, side));
 }
 
+const LINES_PER_PAGE = 100;
+let lineRender = 0;
+
+/* Open the Line list tab at one line; "row" counts in the unfiltered list. */
+function revealLine(row) {
+  ui.lineQuery = "";
+  $("#line-search").value = "";
+  ui.linePage = Math.floor(row / LINES_PER_PAGE);
+  ui.chosenLine = { row, list: lineListKey() };
+  ui.scrollToLine = true;
+  const drawer = $("#drawer");
+  drawer.classList.remove("collapsed");
+  if (drawer.offsetHeight < 180) drawer.style.height = "250px";
+  showDrawer("lines");
+  resizePlot();
+}
+
+const lineListKey = () => `${S.linelist.file}|${S.linelist.nlines}`;
+
 async function renderLines() {
-  const limit = 100;
-  const data = await request(`linelist?offset=${ui.linePage * limit}&limit=${limit}&q=${encodeURIComponent(ui.lineQuery)}`);
+  const limit = LINES_PER_PAGE;
+  const mine = ++lineRender;
+  const offset = ui.linePage * limit;
+  const data = await request(`linelist?offset=${offset}&limit=${limit}&q=${encodeURIComponent(ui.lineQuery)}`);
+  if (mine !== lineRender) return;        // a newer request is on its way
+  const chosen = !ui.lineQuery && ui.chosenLine?.list === lineListKey() ? ui.chosenLine.row - offset : -1;
   const titles = { species: "Species", wlcent: "λ (Å)", excit: "χ (eV)", gflog: "log gf", gamrad: "Rad.", gamqst: "Stark", gamvw: "van der Waals", depth: "VALD depth" };
   const digits = { wlcent: 4, excit: 3, gflog: 3, gamrad: 2, gamqst: 2, gamvw: 3, depth: 3 };
   $("#line-table").replaceChildren(
     h("thead", {}, h("tr", {}, data.columns.map((c) => h("th", {}, titles[c] || c)))),
-    h("tbody", {}, data.rows.map((row) => h("tr", {
+    h("tbody", {}, data.rows.map((row, k) => h("tr", {
+      class: k === chosen ? "chosen" : null,
       title: "Zoom the plot to this line",
       onclick: () => {
         const wave = row[data.columns.indexOf("wlcent")];
         zoomTo(wave - 1, wave + 1);
       },
     }, row.map((value, i) => h("td", {}, data.columns[i] in digits ? fixed(value, digits[data.columns[i]]) : value))))));
+  const marked = $("#line-table tr.chosen");
+  if (ui.scrollToLine && marked) {
+    ui.scrollToLine = false;
+    // Only the panel scrolls; scrollIntoView would move the window's layout too.
+    const body = $(".drawer-body");
+    body.scrollTop += marked.getBoundingClientRect().top - body.getBoundingClientRect().top -
+      (body.clientHeight - marked.offsetHeight) / 2;
+  }
   const pages = Math.max(1, Math.ceil(data.total / limit));
   $("#line-page").textContent = `${data.total.toLocaleString()} lines · page ${ui.linePage + 1}/${pages}`;
   $("#line-prev").disabled = ui.linePage === 0;
@@ -772,22 +910,54 @@ async function renderAbundances() {
     }, h("b", {}, row.el), h("small", {}, row.A === null ? "–" : row.A.toFixed(2))));
   }
   const chosen = data.elements.find((e) => e.el === ui.element) || data.elements[25];
+  renderElementEditor(chosen, data, fitting);
+}
+
+/* The editor is built once per element and then only updated. Replacing the
+   number box after every step broke its arrows in the Mac app: WebKit's arrows
+   learn from pointer movement which one the pointer is over, so a new box under
+   a resting pointer only selected the number. */
+function renderElementEditor(chosen, data, fitting) {
   const editor = $("#element-editor");
   const fixedElement = chosen.el === "H";
-  editor.replaceChildren(
-    h("h3", {}, `${chosen.el}  (Z = ${chosen.z})`),
-    h("div", { class: "row" },
-      h("label", { title: "log10(N_X / N_H) + 12 as used in the synthesis, including [M/H]" }, `A(${chosen.el})`),
-      h("input", {
-        type: "number", step: "0.05", value: chosen.A === null ? "" : Number(chosen.A.toFixed(4)), disabled: fixedElement || jobRunning(), "aria-label": `A(${chosen.el})`,
-        onchange: (e) => send("abund/set", { element: chosen.el, value: e.target.value }),
-      }),
-      h("button", { disabled: fixedElement || jobRunning() || !chosen.delta, onclick: () => send("abund/set", { element: chosen.el, value: null }) }, "Reset")),
-    h("p", { class: "hint" }, `Change relative to ${data.baseline}: ${chosen.delta === null ? "–" : (chosen.delta >= 0 ? "+" : "") + chosen.delta.toFixed(3)} dex (on top of [M/H] = ${fmt(data.monh)}).`),
-    !fixedElement && h("label", { class: "check" },
-      h("input", { type: "checkbox", checked: fitting.has(`abund ${chosen.el}`), disabled: jobRunning(), onchange: (e) => toggleFit(`abund ${chosen.el}`, e.target.checked) }),
-      " Fit this abundance"),
-    h("div", { style: "margin-top:8px" }, nlteControls(chosen.el)));
+  if (editor.dataset.element !== chosen.el || !editor.querySelector("input[type=number]")) {
+    editor.dataset.element = chosen.el;
+    const input = h("input", { type: "number", step: "0.05", "aria-label": `A(${chosen.el})` });
+    let sent = 0;
+    input.addEventListener("change", () => {
+      const mine = ++sent;
+      // Until the last change is answered the box is ahead of the stored value;
+      // writing an older answer into it would undo a step.
+      input.dataset.pending = "1";
+      send("abund/set", { element: chosen.el, value: input.value }).then(() => {
+        if (mine !== sent) return;
+        delete input.dataset.pending;
+        renderAbundances();
+      });
+    });
+    const reset = h("button", { onclick: () => send("abund/set", { element: chosen.el, value: null }) }, "Reset");
+    const fit = h("input", { type: "checkbox", onchange: (e) => toggleFit(`abund ${chosen.el}`, e.target.checked) });
+    editor.replaceChildren(
+      h("h3", {}, `${chosen.el}  (Z = ${chosen.z})`),
+      h("div", { class: "row" },
+        h("label", { title: "log10(N_X / N_H) + 12 as used in the synthesis, including [M/H]" }, `A(${chosen.el})`),
+        input, reset),
+      h("p", { class: "hint change" }),
+      fixedElement ? "" : h("label", { class: "check fit-box" }, fit, " Fit this abundance"),
+      h("div", { class: "nlte-box", style: "margin-top:8px" }));
+  }
+  const input = editor.querySelector("input[type=number]");
+  const value = chosen.A === null ? "" : String(Number(chosen.A.toFixed(4)));
+  if (!input.dataset.pending && (value === "" || Number(input.value) !== Number(value) || input.value === "")) input.value = value;
+  input.disabled = fixedElement || jobRunning();
+  editor.querySelector(".row button").disabled = fixedElement || jobRunning() || !chosen.delta;
+  editor.querySelector(".change").textContent = `Change relative to ${data.baseline}: ${chosen.delta === null ? "–" : (chosen.delta >= 0 ? "+" : "") + chosen.delta.toFixed(3)} dex (on top of [M/H] = ${fmt(data.monh)}).`;
+  const fit = editor.querySelector(".fit-box input");
+  if (fit) {
+    fit.checked = fitting.has(`abund ${chosen.el}`);
+    fit.disabled = jobRunning();
+  }
+  editor.querySelector(".nlte-box").replaceChildren(...[nlteControls(chosen.el)].flat().filter(Boolean));
 }
 
 function renderNlte() {
@@ -953,7 +1123,7 @@ async function showSettings(info) {
   };
 
   if (info.notice) body.append(h("div", { class: "card" }, info.notice));
-  if (busy) body.append(h("div", { class: "card" }, h("span", { class: "spinner" }), `${task.title}: ${task.step}. You can keep working.`));
+  if (busy) body.append(h("div", { class: "card" }, spinner(), `${task.title}: ${task.step}. You can keep working.`));
   if (task.state === "done") body.append(h("div", { class: "card" }, task.message));
   if (task.state === "failed") body.append(h("p", { style: "color:var(--err);white-space:pre-wrap" }, `${task.title} failed. Nothing was changed.\n${task.error}`));
   if (info.restart) {
@@ -996,27 +1166,13 @@ async function showSettings(info) {
     }
   } else {
     body.append(h("p", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
-      h("p", { class: "hint" }, "Versions can be managed when PySME-GUI runs in its own installed environment. This session uses another Python."));
+      h("p", { class: "hint" }, info.custom_python
+        ? "This session uses your own PySME (see Advanced below), so versions are not managed here."
+        : "Versions can be managed when PySME-GUI runs in its own installed environment. This session uses another Python."));
   }
 
-  const python = h("input", { type: "text", value: info.custom_python || "", placeholder: "empty = the app's own environment", "aria-label": "Custom Python", style: "flex:1" });
   body.append(
-    h("h3", {}, "Use your own PySME"),
-    h("p", { class: "hint" }, "Point to a Python that already has PySME, for example a development build. Applies after a restart."),
-    h("div", { class: "row" }, python,
-      h("button", {
-        onclick: async (e) => {
-          e.target.textContent = "Checking…";
-          try {
-            const result = await request("settings/python", { python: python.value.trim() });
-            toast(result.custom_version ? `Saved. PySME ${result.custom_version} will be used after a restart.` : "The app's own environment will be used after a restart.");
-            showSettings(result);
-          } catch (error) {
-            toast(error.message, "error");
-            e.target.textContent = "Save";
-          }
-        },
-      }, "Save")),
+    ownPySME(info),
     h("h3", {}, "Details"),
     h("div", { class: "kv" },
       h("span", {}, "Running"), h("span", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
@@ -1048,6 +1204,58 @@ function channelRow(info, busy, run) {
     offered.map((name) => h("option", { value: name }, names[name])));
   select.value = info.channel;
   return h("label", { class: "row" }, "Receive ", select);
+}
+
+/* For the few who bring their own PySME: folded away, and open when in use. */
+function ownPySME(info) {
+  const command = 'python -c "import sys; print(sys.executable)"';
+  const python = h("input", { type: "text", value: ui.ownDraft ?? info.custom_python ?? "", placeholder: "empty: the app's own PySME", "aria-label": "Path of your Python", style: "flex:1" });
+  python.spellcheck = false;
+  python.addEventListener("input", () => { ui.ownDraft = python.value; });
+
+  const save = async (value, acceptUnsupported = false) => {
+    let result;
+    try {
+      result = await request("settings/python", { python: value, accept_unsupported: acceptUnsupported });
+    } catch (error) {
+      toast(error.message, "error");
+      await showSettings();
+      return;
+    }
+    const checked = result.checked;
+    if (checked && !checked.saved) {
+      const yes = await confirmDialog(`PySME ${checked.pysme} is outside the supported range`,
+        `This interface is made for PySME ${checked.range}. It started with yours, but some functions may fail or behave differently. Use it anyway?`, "Use it anyway");
+      if (yes) await save(value, true);
+      else await showSettings();
+      return;
+    }
+    ui.ownDraft = null;
+    toast(checked ? `Checked: the interface starts with PySME ${checked.pysme}. It is used after a restart.` : "The app's own PySME is used after a restart.");
+    await showSettings(result);
+  };
+
+  const button = h("button", {
+    onclick: (e) => { e.target.textContent = "Checking…"; e.target.disabled = true; save(python.value); },
+  }, "Check and save");
+  python.addEventListener("keydown", (e) => { if (e.key === "Enter") button.click(); });
+
+  const section = h("details", { class: "advanced", ontoggle: () => { ui.advancedOpen = section.open; } },
+    h("summary", {}, "Advanced"),
+    h("h3", {}, "Use a PySME you installed yourself"),
+    h("p", {}, h("b", {}, "Usually leave this empty."), " The app has its own PySME, managed above. Fill this in only to run the interface with an installation of yours, for example a development build or one you compiled."),
+    h("p", { class: "hint" }, "To find the path: in a terminal, activate the environment in which you use PySME, then run"),
+    h("div", { class: "command" }, h("code", { class: "selectable" }, command), h("button", { class: "link", onclick: () => copyText(command) }, "Copy")),
+    h("p", { class: "hint" }, "Paste the whole line it prints: the Python program itself, not the environment folder. That environment needs PySME only; the interface comes with the app."),
+    h("div", { class: "row" }, python, button),
+    info.custom_python
+      ? h("div", {},
+        h("p", {}, `Chosen: PySME ${info.custom_pysme || "(version not recorded)"} from `, h("span", { class: "selectable" }, info.custom_python)),
+        info.custom_supported === false ? h("p", { style: "color:var(--err)" }, `Outside the supported range (${info.supported}).`) : "",
+        h("button", { onclick: () => { ui.ownDraft = null; save(""); } }, "Go back to the app's own PySME"))
+      : "");
+  section.open = ui.advancedOpen ?? Boolean(info.custom_python);
+  return section;
 }
 
 function versionRow(env, info, busy, run) {
@@ -1369,7 +1577,7 @@ function wire() {
         renderForms(true);
         return;
       }
-      send("params", { values: { [name]: value } });
+      sendFrom(input, "params", { values: { [name]: value } }, () => writeParam(input));
     });
     if (input.type === "number") input.addEventListener("keydown", (e) => e.key === "Enter" && input.blur());
   }
@@ -1378,6 +1586,13 @@ function wire() {
     if (document.activeElement && document.activeElement.type === "number") document.activeElement.blur();
   }, { passive: true });
 
+  for (const button of $$("#flux-scale button")) {
+    button.addEventListener("click", () => {
+      ui.flux = button.dataset.normalised === "false";
+      renderFluxScale();
+      if (S) renderPlot();
+    });
+  }
   for (const button of $$("#side-tabs button")) {
     button.addEventListener("click", () => {
       for (const other of $$("#side-tabs button")) other.classList.toggle("active", other === button);
@@ -1488,18 +1703,111 @@ function wire() {
     });
   }
   new ResizeObserver(resizePlot).observe($(".plot-area"));
+  wireCrosshair();
 }
 
+/* At most one redraw per frame, following the size while it changes.
+   (Plotly.Plots.resize waits until the size stops changing, so the plot only
+   caught up after the splitter had been released.) */
 let resizeFrame = null;
 function resizePlot() {
-  cancelAnimationFrame(resizeFrame);
-  resizeFrame = requestAnimationFrame(() => {
+  if (resizeFrame !== null) return;
+  resizeFrame = requestAnimationFrame(async () => {
     const graph = $("#plot");
-    if (graph._pysmeReady && graph.clientWidth) {
-      Plotly.Plots.resize(graph);
-      scheduleLineLabels();
+    const fits = () => !graph._pysmeReady || !graph.clientWidth ||
+      (graph._fullLayout.width === graph.clientWidth && graph._fullLayout.height === graph.clientHeight);
+    let asked = null;
+    try {
+      if (!fits()) {
+        asked = `${graph.clientWidth}x${graph.clientHeight}`;
+        await Plotly.relayout(graph, { width: graph.clientWidth, height: graph.clientHeight });
+        scheduleLineLabels();
+      }
+    } finally {
+      resizeFrame = null;
+      // The box may have changed again during the redraw. Comparing with what was
+      // asked for, not with what Plotly drew, rules out an endless redraw.
+      if (asked && asked !== `${graph.clientWidth}x${graph.clientHeight}`) resizePlot();
     }
   });
+}
+
+/* Plotly redraws its hover at most every 50 ms, so its line and value box trail
+   the mouse. Both are plain elements here, moved with every pointer event. */
+
+/* The value of every shown curve at the data point nearest to a wavelength. */
+function valuesAt(graph, wave) {
+  const rows = [];
+  for (const trace of graph.data || []) {
+    // "meta" marks the curves to report; the error band has none.
+    if (!trace.meta || trace.visible === false || trace.visible === "legendonly") continue;
+    const x = trace.x;
+    let low = 0, high = x.length - 1;
+    if (high < 0 || wave < x[low] || wave > x[high]) continue;     // another segment
+    while (high - low > 1) {
+      const middle = (low + high) >> 1;
+      if (x[middle] < wave) low = middle;
+      else high = middle;
+    }
+    const i = wave - x[low] <= x[high] - wave ? low : high;
+    if (trace.y[i] === null || trace.y[i] === undefined) continue;
+    rows.push({ name: trace.meta, colour: trace.line.color, wave: x[i], value: trace.y[i] });
+  }
+  return rows;
+}
+
+function hideReadout() {
+  $("#crosshair").hidden = true;
+  $("#readout").hidden = true;
+}
+
+/* Unnormalised fluxes are in the millions. */
+const readoutValue = (value) => (Math.abs(value) >= 1e4 ? value.toExponential(4) : value.toFixed(4));
+
+function showReadout(rows) {
+  const box = $("#readout");
+  // Reuse the items: rebuilding them on every move would cost time for nothing.
+  while (box.children.length < rows.length + 1) {
+    box.append(h("div", {}, h("i", {}), h("span", { class: "name" }), h("span", {})));
+  }
+  const [title, ...items] = box.children;
+  title.children[0].hidden = true;
+  title.children[1].textContent = "λ";
+  title.children[2].textContent = `${rows[0].wave.toFixed(4)} Å`;
+  items.forEach((item, k) => {
+    item.hidden = k >= rows.length;
+    if (item.hidden) return;
+    item.children[0].style.background = rows[k].colour;
+    item.children[1].textContent = rows[k].name;
+    item.children[2].textContent = readoutValue(rows[k].value);
+  });
+  box.hidden = false;
+}
+
+function wireCrosshair() {
+  const area = $(".plot-area");
+  const line = $("#crosshair");
+  area.addEventListener("pointermove", (event) => {
+    const graph = $("#plot");
+    const size = graph._fullLayout && graph._fullLayout._size;
+    if (!size || graph.style.visibility === "hidden" || event.buttons) return hideReadout();
+    const frame = graph.getBoundingClientRect();
+    const x = event.clientX - frame.left;
+    const y = event.clientY - frame.top;
+    if (x < size.l || x > size.l + size.w || y < size.t || y > size.t + size.h) return hideReadout();
+    line.style.top = `${graph.offsetTop + size.t}px`;
+    line.style.height = `${size.h}px`;
+    line.style.transform = `translateX(${graph.offsetLeft + x}px)`;
+    line.hidden = false;
+
+    const [first, last] = graph._fullLayout.xaxis.range.map(Number);
+    const rows = valuesAt(graph, first + ((x - size.l) / size.w) * (last - first));
+    if (rows.length) showReadout(rows);
+    else $("#readout").hidden = true;
+  });
+  area.addEventListener("pointerleave", hideReadout);
+  area.addEventListener("pointerdown", hideReadout);   // zoom and selection draw their own box
+  area.addEventListener("wheel", hideReadout, { passive: true });
 }
 
 async function start() {

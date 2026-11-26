@@ -113,9 +113,20 @@ The native window itself (the Swift part, including the setup screen) only
 changes when you install a newer disk image. That also brings the interface in
 it, and keeps your PySME version if supported.
 
-**Use your own PySME.** In the same dialog you can point the app at another
-Python that has PySME, for example a development build. Version management is
-then switched off. Clear the field to return to the app's own environment.
+**Use your own PySME (advanced).** Most people leave this empty. Under
+*Updates & settings → Advanced* the interface can run with an installation of
+yours, such as a development build or one you compiled. To find the path,
+activate the environment in which you use PySME and run
+
+```bash
+python -c "import sys; print(sys.executable)"
+```
+
+then paste the line it prints. Your environment needs PySME only; the interface
+comes with the app. Before the path is saved, the app checks that the interface
+starts with it; a PySME outside the supported range is used only if you confirm.
+It takes effect after a restart. Version management is off meanwhile; *Go back to
+the app's own PySME* undoes it.
 
 ## Reporting a problem
 

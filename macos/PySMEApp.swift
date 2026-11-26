@@ -242,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         record("--- start \(Date()) build \(bundleID) ---")
 
         guard let active = activeSelection() else {
-            install("Setting up PySME", "This downloads Python and PySME (about 200 MB). It happens only once.")
+            install("Setting up PySME", "This downloads Python and PySME (about 120 MB). It happens only once.")
             return
         }
         // A newer app dragged into Applications brings a newer interface with it.
@@ -724,7 +724,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         await wait(500);
         const settingsBody = document.querySelector('#dialog .dialog-body').clientHeight;
         document.querySelector('#dialog').close();
+        const about = await request('settings');
         return JSON.stringify({
+          python: about.python, managed: about.managed, runningPySME: about.pysme,
+          restartDue: about.restart,
           theme: currentTheme(), windowAppearance: await windowAppearance(), settingsBody,
           reportOk: report.text.includes('== Versions ==') && report.text.includes('Application log'),
           native: NATIVE, job: S.job.state, error: S.job.error || null,

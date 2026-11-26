@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -125,3 +126,22 @@ def test_appearance_is_remembered_and_written_into_the_page(server, tmp_path, mo
     request(base, "/api/settings/theme", token=app.token, body={"theme": "auto"})
     assert b'<html lang="en">' in request(base, "/")[1]
     assert request(base, "/api/settings/theme", token=app.token, body={"theme": '"><script>'})[0] == 400
+
+
+def test_the_wordmarks_the_page_asks_for_are_served(server):
+    _, base = server
+    page = request(base, "/")[1].decode()
+    names = re.findall(r'src="(wordmark-[a-z-]+\.png)"', page)
+    assert names == ["wordmark-on-light.png", "wordmark-on-dark.png"]
+    for name in names:
+        status, body = request(base, "/" + name)
+        assert status == 200 and body.startswith(b"\x89PNG")
+
+
+def test_the_plot_script_comes_with_the_interface(server, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "plotly", None)      # "import plotly" now fails
+    _, base = server
+    status, body = request(base, "/vendor/plotly.min.js")
+    assert status == 200 and len(body) > 1_000_000 and b"plotly.js v" in body[:500]

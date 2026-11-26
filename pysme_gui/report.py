@@ -18,7 +18,7 @@ from . import __version__, envmanager
 
 LOG_LINES = 400
 APP_LOG_LINES = 150
-PACKAGES = ("pysme-astro", "numpy", "scipy", "astropy", "plotly")
+PACKAGES = ("pysme-astro", "numpy", "scipy", "astropy")
 SETTINGS = ("teff", "logg", "monh", "vmic", "vmac", "vsini", "vrad", "ipres", "iptype")
 _VALUES = re.compile(r"(Synthesizing (?:residual|jacobian) with values ).*")
 _OTHER_HOME = re.compile(r"(/Users/|/home/|[A-Za-z]:[\\/]Users[\\/])(?!Shared\b|<user>)[^\\/\n'\":]+")
