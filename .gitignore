@@ -1,14 +1,4 @@
-.vscode/
-
-node_modules/
 dist/
-test_data/
-out/
-
-scripts/python.txt
-scripts/__pycache__/
-
-# CSS are created from SCSS
-css/
-
-syntherr.log
+__pycache__/
+*.pyc
+.pytest_cache/

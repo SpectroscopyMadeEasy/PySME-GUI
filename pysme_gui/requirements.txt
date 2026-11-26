@@ -1,0 +1,2 @@
+# Installed into the app's private environment by envmanager.py.
+pysme-astro>=1.2.0,<2

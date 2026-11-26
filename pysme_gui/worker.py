@@ -1,0 +1,92 @@
+"""Run one synthesis or fit in its own process.
+
+Keeping SMElib out of the server process means a run can be cancelled at any
+time, and a crash in the C/Fortran code cannot take the window down with it.
+
+Usage: python -m pysme_gui.worker JOB_DIRECTORY
+"""
+
+import json
+import os
+import sys
+import traceback
+
+import numpy as np
+
+
+def prepare(sme, job):
+    """Apply the wavelength setup of a job to a freshly loaded structure.
+
+    Returns the flags that were changed for this run only.
+    """
+    restore = {}
+    if not job["has_obs"]:
+        for name in ("synth", "cont", "spec", "uncs", "mask", "telluric"):
+            setattr(sme, name, None)
+        vrad = np.atleast_1d(sme.vrad)[0]
+        sme.wave = None
+        sme.wran = np.array(job["ranges"], dtype=float)
+        # Without data there is nothing to fit a velocity or continuum to.
+        if sme.vrad_flag in ("whole", "each"):
+            restore["vrad_flag"] = sme.vrad_flag
+            sme.vrad_flag = "fix"
+        if sme.cscale_flag not in ("none", "fix"):
+            restore["cscale_flag"] = sme.cscale_flag
+            sme.cscale_flag = "none"
+        step = job.get("step")
+        if step:
+            grids = []
+            for start, end in job["ranges"]:
+                count = int(np.floor((end - start) / step + 1e-9)) + 1
+                grids.append(start + step * np.arange(count))
+            sme.wave = grids
+        nseg = len(job["ranges"])
+        sme.vrad = np.full(nseg, vrad)
+        sme.cscale = None
+    elif sme.uncs is None:
+        sme.uncs = [
+            np.full(len(sme.spec[i]), abs(np.nanmedian(sme.spec[i])) / job["snr"] or 1.0 / job["snr"])
+            for i in range(len(sme.spec))
+        ]
+    return restore
+
+
+def run(directory):
+    with open(os.path.join(directory, "job.json"), encoding="utf-8") as handle:
+        job = json.load(handle)
+
+    from pysme.sme import SME_Structure
+
+    sme = SME_Structure.load(os.path.join(directory, "in.sme"))
+    restore = prepare(sme, job)
+
+    if job["kind"] == "synth":
+        from pysme.synthesize import synthesize_spectrum
+
+        sme = synthesize_spectrum(sme)
+    elif job["kind"] == "fit":
+        from pysme.solve import solve
+
+        sme = solve(sme, list(job["parameters"]))
+    else:
+        raise ValueError(f"Unknown job kind {job['kind']}")
+
+    for name, value in restore.items():
+        setattr(sme, name, value)
+    sme.save(os.path.join(directory, "out.sme"))
+
+
+def main():
+    directory = sys.argv[1]
+    try:
+        run(directory)
+    except BaseException as exc:
+        traceback.print_exc()
+        with open(os.path.join(directory, "error.json"), "w", encoding="utf-8") as handle:
+            json.dump({"type": type(exc).__name__, "message": str(exc)}, handle)
+        sys.stdout.flush()
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
