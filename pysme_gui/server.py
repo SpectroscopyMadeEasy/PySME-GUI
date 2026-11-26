@@ -188,6 +188,7 @@ class Updater:
             "environments": environments,
             "recommended": constants["recommended"],
             "supported": envmanager.supported_text(constants),
+            "minimum": constants["minimum"],
             "restart": restart,
             "notice": record.get("notice"),
             "latest": self.latest,
@@ -456,6 +457,7 @@ class App:
         state["job"] = self.jobs.status()
         state["log_seq"] = self.log.seq
         state["update"] = {"task": self.updater.state, "latest": self.updater.latest}
+        state["release"] = {"version": __version__, "stage": envmanager.stage(__version__)}
         return state
 
     # ------------------------------------------------------------------ routes
@@ -489,12 +491,16 @@ class App:
                     max(int(arg("offset", "0")), 0),
                     min(max(int(arg("limit", "100")), 1), 500), arg("q"),
                 )
+            if route == "linelist/line":
+                return session.line(arg("id"))
+            if route == "linelist/detail":
+                return session.line_detail(arg("id"))
             if route == "lines":
                 return session.strong_lines(
                     float(arg("wmin")), float(arg("wmax")), min(int(arg("limit", "30")), 200)
                 )
             if route == "citation":
-                return {"text": session.citation(arg("format"))}
+                return session.citations(arg("format"))
         raise KeyError(route)
 
     def post(self, route, body):
@@ -554,6 +560,10 @@ class App:
                 session.open_path(body["path"])
             elif route == "linelist/load":
                 session.load_linelist(body["path"])
+            elif route == "linelist/edit":
+                session.set_line(body["id"], body["column"], body.get("value"))
+            elif route == "linelist/reset":
+                session.reset_lines(body.get("id"))
             elif route == "example":
                 session.load_example()
             elif route == "save":
@@ -563,7 +573,7 @@ class App:
             elif route == "export/citation":
                 path = os.path.expanduser(body["path"])
                 with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(session.citation(body.get("format")))
+                    handle.write(session.citations(body.get("format"))["text"])
                 extra["saved"] = path
             elif route == "params":
                 session.set_params(body["values"])
@@ -574,13 +584,19 @@ class App:
             elif route == "observation/remove":
                 session.remove_observation()
             elif route == "mask":
-                extra["pixels"] = session.set_mask(body["start"], body["end"], body["value"])
+                extra["pixels"] = session.set_mask(
+                    body["start"], body["end"], body["value"], bool(body.get("remove"))
+                )
             elif route == "abund/set":
-                session.set_abundance(body["element"], body.get("value"))
+                session.set_abundance(body["element"], body.get("value"), body.get("scale", "A"))
+            elif route == "abund/reference":
+                session.set_solar_reference(body["name"])
             elif route == "abund/pattern":
                 session.apply_abund_pattern(body["name"])
             elif route == "nlte":
                 session.set_nlte(body["element"], bool(body["enabled"]), body.get("grid"))
+            elif route == "nlte/off":
+                session.nlte_off()
             elif route == "run":
                 if body.get("kind") not in ("synth", "fit"):
                     raise UserError("Unknown run type.")

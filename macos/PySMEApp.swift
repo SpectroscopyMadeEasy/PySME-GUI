@@ -112,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     var pageReady = false
     var pendingFile: String?
     var themeItems: [String: NSMenuItem] = [:]
+    var zoom: CGFloat = 1
+    let zoomSteps: [CGFloat] = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
     var recent: [String] = []
     var logHandle: FileHandle?
     var startGeneration = 0
@@ -186,8 +188,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let page = paths.resources.appendingPathComponent("setup.html")
         setupView.loadFileURL(page, allowingReadAccessTo: paths.resources)
 
+        // The build check shares these defaults with the installed app: it neither
+        // reads nor changes the user's zoom.
+        if environment["PYSME_GUI_SELFTEST"] == nil {
+            let saved = CGFloat(UserDefaults.standard.double(forKey: "pageZoom"))
+            if zoomSteps.contains(where: { abs($0 - saved) < 0.001 }) { setZoom(saved) }
+        }
+
         window.contentView = setupView
         window.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - zoom
+
+    /// Scales the whole interface, as a browser does.
+    func setZoom(_ value: CGFloat) {
+        zoom = value
+        web.pageZoom = value
+        setupView.pageZoom = value
+        if environment["PYSME_GUI_SELFTEST"] == nil {
+            UserDefaults.standard.set(Double(value), forKey: "pageZoom")
+        }
+    }
+
+    @objc func zoomIn(_ sender: Any?) {
+        setZoom(zoomSteps.first { $0 > zoom + 0.001 } ?? zoomSteps[zoomSteps.count - 1])
+    }
+
+    @objc func zoomOut(_ sender: Any?) {
+        setZoom(zoomSteps.last { $0 < zoom - 0.001 } ?? zoomSteps[0])
+    }
+
+    @objc func actualSize(_ sender: Any?) {
+        setZoom(1)
     }
 
     /// Run `window.setup.<call>`, waiting for the page when necessary.
@@ -751,8 +784,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 try? report.write(to: output.appendingPathComponent("report.json"), atomically: true, encoding: .utf8)
                 self.web.takeSnapshot(with: nil) { image, _ in
                     self.writePNG(image, to: output.appendingPathComponent("window.png"))
-                    self.quitConfirmed = true
-                    NSApp.terminate(nil)
+                    self.checkZoom(into: output, keys: ["", "=", "+", "-", "0"], seen: [])
+                }
+            }
+        }
+    }
+
+    /// Press the zoom keys through the menu and note how wide the page is, in
+    /// its own pixels, after each; a picture is taken at the largest zoom.
+    func checkZoom(into output: URL, keys: [String], seen: [String]) {
+        guard let key = keys.first else {
+            try? "[\(seen.joined(separator: ", "))]".write(
+                to: output.appendingPathComponent("zoom.json"), atomically: true, encoding: .utf8)
+            quitConfirmed = true
+            NSApp.terminate(nil)
+            return
+        }
+        if !key.isEmpty, let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: key,
+            charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0) {
+            _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.web.evaluateJavaScript("window.innerWidth") { width, _ in
+                let line = "{\"key\": \"\(key)\", \"zoom\": \(self.zoom), \"width\": \(width as? Int ?? 0)}"
+                let next = {
+                    self.checkZoom(into: output, keys: Array(keys.dropFirst()), seen: seen + [line])
+                }
+                if key == "+" {
+                    self.web.takeSnapshot(with: nil) { image, _ in
+                        self.writePNG(image, to: output.appendingPathComponent("window-zoomed.png"))
+                        next()
+                    }
+                } else {
+                    next()
                 }
             }
         }
@@ -901,6 +967,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             gui(appearance, title, command)
             themeItems[theme] = appearance.items.last
         }
+        view.addItem(.separator())
+        add(view, "Actual Size", #selector(actualSize(_:)), "0", target: self)
+        add(view, "Zoom In", #selector(zoomIn(_:)), "+", target: self)
+        // ⌘= is the same key without Shift.
+        let unshifted = add(view, "Zoom In", #selector(zoomIn(_:)), "=", target: self)
+        unshifted.isHidden = true
+        unshifted.allowsKeyEquivalentWhenHidden = true
+        add(view, "Zoom Out", #selector(zoomOut(_:)), "-", target: self)
         view.addItem(.separator())
         add(view, "Reload Interface", #selector(reload(_:)), "r", target: self)
         add(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])

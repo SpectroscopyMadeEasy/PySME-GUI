@@ -97,7 +97,7 @@ def test_tag_whose_code_says_something_else_is_refused(published):
         envmanager.latest_gui()
 
 
-def test_channel_comes_from_the_first_installation_and_then_stays(tmp_path, monkeypatch):
+def test_releases_only_until_another_channel_is_chosen_which_then_stays(tmp_path, monkeypatch):
     monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(envmanager, "smoke_test", lambda *a: {})
 
@@ -121,7 +121,8 @@ def test_channel_comes_from_the_first_installation_and_then_stays(tmp_path, monk
         return str(package.parent)
 
     envmanager.setup(source("0.3.0b1"), log=lambda t: None)
-    assert envmanager.channel() == "beta"
+    assert envmanager.channel() == "stable"        # even for a beta installation
+    envmanager.set_channel("beta")
     envmanager.setup(source("0.3.0"), log=lambda t: None)
     assert envmanager.channel() == "beta"
     with pytest.raises(RuntimeError, match="channel"):

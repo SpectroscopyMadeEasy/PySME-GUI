@@ -7,6 +7,7 @@ import urllib.request
 
 import pytest
 
+from pysme_gui import __version__
 from pysme_gui import envmanager
 from pysme_gui.server import create_server
 
@@ -44,6 +45,9 @@ def test_api_needs_token_and_loopback_host(server):
     assert request(base, "/api/new", body={})[0] == 403
     status, body = request(base, "/api/state", token=app.token)
     assert status == 200 and json.loads(body)["job"]["state"] == "idle"
+    # The label beside the name follows the version of the interface.
+    release = json.loads(body)["release"]
+    assert release == {"version": __version__, "stage": envmanager.stage(__version__)}
 
 
 def test_static_files_cannot_escape(server):

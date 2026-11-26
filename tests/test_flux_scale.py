@@ -1,4 +1,4 @@
-"""The two flux scales, and the way from a line label to the Line list tab."""
+"""The two flux scales."""
 
 import threading
 import time
@@ -19,22 +19,6 @@ def run(jobs, kind, timeout=300):
         assert time.time() - start < timeout, "job timed out"
         time.sleep(0.2)
     return jobs.status()
-
-
-def test_a_line_label_points_at_its_row_in_the_line_list():
-    session = Session()
-    session.load_example()
-    table = session.linelist_rows(limit=100000)
-    species, wave = table["columns"].index("species"), table["columns"].index("wlcent")
-    lines = session.strong_lines(6438, 6442, limit=20)["lines"]
-    assert lines
-    for line in lines:
-        row = table["rows"][line["row"]]
-        assert row[species] == line["species"]
-        assert row[wave] == pytest.approx(line["wave"])
-        # The tab shows one page at a time, found by this offset.
-        page = session.linelist_rows(offset=line["row"] // 7 * 7, limit=7)["rows"]
-        assert page[line["row"] % 7] == row
 
 
 def synthesized(session, kind="synth"):

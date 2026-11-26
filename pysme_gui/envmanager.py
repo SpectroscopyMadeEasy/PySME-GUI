@@ -158,11 +158,10 @@ def in_channel(version, channel):
 
 
 def channel():
-    """Which interface releases the user receives."""
+    """Which interface releases the user receives: releases only, unless another
+    channel was chosen, whatever stage is installed."""
     chosen = settings().get("channel")
-    if chosen in CHANNELS:
-        return chosen
-    return stage(package_constants(os.path.dirname(os.path.abspath(__file__)))["version"])
+    return chosen if chosen in CHANNELS else "stable"
 
 
 def set_channel(name):
@@ -520,8 +519,6 @@ def setup(source, bundle_id=None, repair=False, log=print):
         shutil.rmtree(gui_dir(gui_id), ignore_errors=True)
         raise
     activate(gui_id, env_id, bundle_id=bundle_id, notice=notice, log=log)
-    if settings().get("channel") not in CHANNELS:
-        set_channel(stage(constants["version"]))
     if replaced and not _is_running_from(env_dir(replaced)):
         remove_env(replaced, log=log)
     log(f"Using PySME {env_info(env_id)['pysme_version']} with PySME-GUI {constants['version']}.")

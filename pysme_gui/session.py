@@ -4,6 +4,7 @@ All science objects are real PySME objects. The browser side only ever sees the
 JSON produced here, so there is no second implementation of the SME file format.
 """
 
+import functools
 import io
 import math
 import os
@@ -16,6 +17,7 @@ from pysme.continuum_and_radial_velocity import apply_continuum
 from pysme.linelist.vald import ValdFile
 from pysme.sme import MASK_VALUES, SME_Structure
 
+from . import citations
 from .spectrum_io import read_text_spectrum
 
 SME_EXTENSIONS = {".sme", ".inp", ".sav", ".out"}
@@ -26,6 +28,9 @@ ABUND_PATTERNS = [
     "asplund2021", "asplund2009", "grevesse2007", "asplund2005", "grevesse1998",
     "grevesse1996", "anders1989", "lodders2010", "lodders2003", "amarsi2026",
 ]
+# What abundances are written relative to, unless chosen otherwise. PySME starts
+# a structure with this table, so a new star reads [X/Fe] = 0.
+DEFAULT_SOLAR_REFERENCE = "grevesse2007"
 
 # name -> (attribute, minimum or None, strictly above minimum)
 FLOAT_PARAMS = {
@@ -50,6 +55,13 @@ CHOICE_PARAMS = {
 }
 BASIC_FIT_PARAMS = ["teff", "logg", "monh", "vmic", "vmac", "vsini"]
 LINE_COLUMNS = ["species", "wlcent", "excit", "gflog", "gamrad", "gamqst", "gamvw", "depth"]
+# The line data that enters the synthesis; species and VALD's depth estimate do not.
+LINE_EDITABLE = {
+    "wlcent": "Wavelength", "excit": "Excitation potential", "gflog": "log gf",
+    "gamrad": "Radiative damping", "gamqst": "Stark damping", "gamvw": "van der Waals damping",
+}
+LIGHT_SPEED = 299792.458       # km/s
+VELOCITY_FREE = ("whole", "each")   # vrad_flag values with which a fit finds it
 
 MAX_RUNS = 8
 MAX_PLOT_POINTS = 600_000
@@ -95,6 +107,79 @@ def parse_float(value, name):
     return number
 
 
+MAX_MU = 77        # SMElib's limit on the number of angles
+
+
+def default_mu(count):
+    """The angles PySME takes for a number of them: the middles of rings of
+    equal area, from the disk centre to the limb."""
+    return np.sqrt(0.5 * (2 * np.arange(count) + 1) / count)[::-1]
+
+
+def parse_mu(value):
+    """Angles typed as text ("0.9, 0.5 0.2") or given as a list."""
+    if isinstance(value, str):
+        value = [part for part in re.split(r"[\s,;]+", value) if part]
+    if not isinstance(value, (list, tuple)):
+        raise UserError("Give the mu values as a list of numbers.")
+    if not 1 <= len(value) <= MAX_MU:
+        raise UserError(f"Give between 1 and {MAX_MU} mu values.")
+    numbers = np.array([parse_float(v, "Each mu value") for v in value])
+    # PySME itself accepts 0 and repeated values and computes something anyway.
+    if np.any(numbers <= 0) or np.any(numbers > 1):
+        raise UserError("Each mu value must be above 0 and at most 1.")
+    if len(np.unique(numbers)) != len(numbers):
+        raise UserError("The mu values must all be different.")
+    return numbers
+
+
+NO_RATIO = ("H", "He")     # [M/H] does not apply to them, so they are given as A
+
+
+@functools.lru_cache(maxsize=None)
+def solar_abundances(name):
+    """A(X) of the Sun in one of PySME's tables, by atomic number - 1; NaN where
+    the table has no value."""
+    values = np.array(Abund(monh=0, pattern=name)._pattern, dtype=float)
+    values.setflags(write=False)
+    return values
+
+
+def ratio_label(element):
+    return "[Fe/H]" if element == "Fe" else f"[{element}/Fe]"
+
+
+def fit_ratio(row, a_fe, names, solar):
+    """A fitted abundance relative to the Sun, or None if it cannot be written so.
+
+    [X/Fe] = pattern(X) - pattern(Fe) - the Sun's difference: [M/H] drops out.
+    So the solver's own errors, which are on the pattern scale, hold for [X/Fe]
+    even if [M/H] was free too. If Fe was solved for as well, the two are
+    correlated and no error is given. They never include the Sun's or Fe's own.
+    """
+    from pysme.abund import elements
+
+    element = row["name"].split()[1]
+    order = list(elements)
+    sun = solar[order.index(element)]
+    value = row.get("value")
+    if element in NO_RATIO or value is None or not math.isfinite(sun):
+        return None
+    errors = {"unc_fit": None, "unc_sme": None}
+    if element == "Fe":
+        value = value - sun
+        errors = {key: row.get(key) for key in errors}     # those of A(Fe)
+    else:
+        iron = solar[order.index("Fe")]
+        if a_fe is None or not math.isfinite(iron):
+            return None
+        value = value - sun - (a_fe - iron)
+        if "abund Fe" not in names:
+            solver = row.get("solver") or {}
+            errors = {key: solver.get(key) for key in errors}
+    return {"label": ratio_label(element), "value": float(value), **errors}
+
+
 def default_sme():
     sme = SME_Structure()
     sme.teff, sme.logg, sme.monh = 5770.0, 4.44, 0.0
@@ -129,6 +214,7 @@ def software_versions():
 class Session:
     def __init__(self):
         self.revision = 0
+        self.linelist_version = 0     # counts the lists that have been loaded
         self.reset()
 
     # ------------------------------------------------------------------ basics
@@ -137,6 +223,7 @@ class Session:
         self.sme = default_sme()
         self.path = None
         self.linelist_file = None
+        self._new_linelist()
         self.obs = None          # full observation, list of segment dicts
         self.windows = None      # list of [start, end] cut out of the observation
         self.has_uncs = False
@@ -147,9 +234,11 @@ class Session:
         self._run_counter = 0
         self.synth_stale = False
         self.synth_correction = None   # continuum correction inside that spectrum
+        self.synth_vrad = None         # velocity per segment it was shifted by, km/s
         self.computed_with = None  # versions that produced the current spectrum
         self.fit_info = None
         self.notes = []
+        self.solar_reference = DEFAULT_SOLAR_REFERENCE
         self._remember_abund_baseline()
         self.dirty = False
         self.touch(dirty=False)
@@ -194,6 +283,10 @@ class Session:
         sme.fitparameters = list(dict.fromkeys(
             canonical_parameter(n) for n in (sme.fitparameters or [])
         ))
+        if "vrad" in sme.fitparameters:       # how scripts may ask PySME to fit it
+            sme.fitparameters = [n for n in sme.fitparameters if n != "vrad"]
+            if sme.vrad_flag not in VELOCITY_FREE:
+                sme.vrad_flag = "whole"
         meta = sme.meta or {}
         setup = meta.get("gui_synth_setup")
         self.synth_stale = bool(meta.get("gui_synth_stale", False))
@@ -201,10 +294,20 @@ class Session:
             self.synth_correction = meta["gui_synth_continuum"]
         else:
             self.synth_correction = self._applied_continuum(sme, sme.spec is not None)
+        if "gui_synth_vrad" in meta:
+            self.synth_vrad = meta["gui_synth_vrad"]
+        else:
+            self.synth_vrad = None if sme.spec is None else self._velocities(sme)
+        # Saved by row, and the saved order is the order the rows now have.
+        self.line_edits = {
+            int(row): dict(was) for row, was in (meta.get("gui_line_edits") or {}).items()
+        }
         used = meta.get("gui_computed_with")
         if isinstance(used, dict) and {"gui", "pysme", "smelib"} <= set(used):
             self.computed_with = dict(used)
         self.linelist_file = meta.get("gui_linelist_file")
+        if meta.get("gui_solar_reference") in ABUND_PATTERNS:
+            self.solar_reference = meta["gui_solar_reference"]
         self._remember_abund_baseline()
 
         if sme.spec is not None and sme.wave is not None:
@@ -333,8 +436,110 @@ class Session:
         if len(linelist) == 0:
             raise UserError("The line list contains no lines.")
         self.sme.linelist = linelist
+        self._new_linelist()
         self.linelist_file = path
         self.notes = [f"Loaded {len(linelist)} lines from {os.path.basename(path)}."]
+        self.touch(stale=True)
+
+    # ------------------------------------------------------------- line data
+
+    def _new_linelist(self):
+        """Forget what belonged to the previous list."""
+        self.line_edits = {}    # line id -> {column: value before the first edit}
+        self.line_ids = None    # the id of the line in each row, once rows move
+        self.linelist_version += 1
+
+    def _line_bibtex(self):
+        """The bibliography of the line list: PySME's, and what it skips."""
+        linelist = self.sme.linelist
+        if not len(linelist):
+            return ""
+        cached = getattr(self, "_line_bib", None)
+        if cached is None or cached[0] != self.linelist_version:
+            texts = linelist._lines["reference"] if "reference" in linelist._lines else []
+            extra = citations.missed_by_pysme(
+                texts, citations.known_keys(linelist.citation_info),
+                linelist.lineformat == "long",
+            )
+            cached = (self.linelist_version, extra)
+            self._line_bib = cached
+        return (linelist.citation_info or "") + cached[1]
+
+    def _ids(self):
+        count = len(self.sme.linelist)
+        if self.line_ids is None or len(self.line_ids) != count:
+            self.line_ids = np.arange(count)
+        return self.line_ids
+
+    def _row_of(self, line_id):
+        try:
+            rows = np.flatnonzero(self._ids() == int(line_id))
+        except (TypeError, ValueError):
+            rows = []
+        if not len(rows):
+            raise UserError("That line is not in the line list.")
+        return int(rows[0])
+
+    def line(self, line_id):
+        """One line: where it is in the table, its data, and what was changed."""
+        row = self._row_of(line_id)
+        frame = self.sme.linelist._lines
+        return clean({
+            "id": int(line_id), "row": row, "species": str(frame["species"].iat[row]),
+            "values": {c: frame[c].iat[row] for c in LINE_EDITABLE if c in frame.columns},
+            "original": self.line_edits.get(int(line_id), {}),
+        })
+
+    def set_line(self, line_id, column, value):
+        row = self._row_of(line_id)
+        frame = self.sme.linelist._lines
+        if column not in LINE_EDITABLE or column not in frame.columns:
+            raise UserError(f"{column} cannot be edited.")
+        number = parse_float(value, LINE_EDITABLE[column])
+        if column == "wlcent" and number <= 0:
+            raise UserError("The wavelength must be positive.")
+        if column == "excit" and number < 0:
+            raise UserError("The excitation potential cannot be negative.")
+        old = float(frame[column].iat[row])
+        if number == old:
+            return
+        edits = dict(self.line_edits.get(int(line_id), {}))
+        if number == edits.setdefault(column, old):
+            del edits[column]                      # back to what the file had
+        if edits:
+            self.line_edits[int(line_id)] = edits
+        else:
+            self.line_edits.pop(int(line_id), None)
+        self._write_line(row, column, number)
+        self._lines_changed()
+
+    def reset_lines(self, line_id=None):
+        """Give one line, or every line, the values it was loaded with."""
+        targets = list(self.line_edits) if line_id is None else [int(line_id)]
+        changed = False
+        for target in targets:
+            for column, original in self.line_edits.pop(target, {}).items():
+                self._write_line(self._row_of(target), column, original)
+                changed = True
+        if changed:
+            self._lines_changed()
+
+    def _write_line(self, row, column, number):
+        frame = self.sme.linelist._lines
+        ids = self._ids()
+        frame.iat[row, frame.columns.get_loc(column)] = number
+        if column == "wlcent":
+            # SMElib needs the list in order of wavelength.
+            order = np.argsort(frame["wlcent"].to_numpy(), kind="stable")
+            self.sme.linelist._lines = frame.iloc[order].reset_index(drop=True)
+            self.line_ids = ids[order]
+
+    def _lines_changed(self):
+        # PySME can keep which lines matter and how far each one reaches. Both
+        # depend on the line data, but its test for "out of date" looks only at
+        # the star, so have them worked out again.
+        for name in ("almax_paras", "cdr_paras"):
+            setattr(self.sme.linelist, name, None)
         self.touch(stale=True)
 
     def load_example(self):
@@ -367,6 +572,14 @@ class Session:
             elif name in BOOL_PARAMS:
                 setattr(sme, name, bool(value))
                 changed_physics = True
+            elif name == "vrad_flag":
+                if value not in CHOICE_PARAMS[name]:
+                    raise UserError(f"Unknown value for {name}: {value}")
+                # Whether the velocity is free changes no spectrum, only what a
+                # fit does. Switching it off altogether drops a shift, though.
+                if value == "none" and np.any(np.atleast_1d(sme.vrad) != 0):
+                    changed_physics = True
+                sme.vrad_flag = value
             elif name in CHOICE_PARAMS:
                 if value not in CHOICE_PARAMS[name]:
                     raise UserError(f"Unknown value for {name}: {value}")
@@ -376,7 +589,10 @@ class Session:
                 number = int(parse_float(value, name))
                 if not 1 <= number <= 77:
                     raise UserError("Number of mu angles must be between 1 and 77.")
-                sme.nmu = number
+                sme.nmu = number           # PySME puts its default values in
+                changed_physics = True
+            elif name == "mu":
+                sme.mu = parse_mu(value)   # stored from disk centre to limb
                 changed_physics = True
             elif name == "ipres":
                 number = parse_float(value, "Resolving power")
@@ -390,6 +606,8 @@ class Session:
                 changed_physics = True
             elif name == "vrad":
                 number = parse_float(value, "Radial velocity")
+                if sme.vrad_flag == "none":
+                    sme.vrad_flag = "fix"          # PySME ignores a value when "none"
                 sme.vrad = np.full(sme.nseg or 1, number)
                 changed_physics = True
             elif name == "snr":
@@ -464,59 +682,174 @@ class Session:
         self.ranges, self.step = parsed, step
         self.touch(stale=True)
 
-    def set_mask(self, start, end, value):
+    def set_mask(self, start, end, value, remove=False):
+        """Add a mask flag to the pixels from start to end, or take it off.
+
+        PySME's mask values are flags that a pixel can combine: it fits those with
+        LINE, finds the continuum from those with CONT and the velocity from those
+        with VRAD. So marking continuum leaves a line pixel in the fit. Removing
+        the value 0 takes every flag off, and the pixel is not used.
+        """
         if self.obs is None or self.sme.mask is None:
             raise UserError("Import an observed spectrum before editing the mask.")
         value = int(value)
-        allowed = {int(MASK_VALUES.BAD), int(MASK_VALUES.LINE), int(MASK_VALUES.CONT)}
-        if value not in allowed:
+        remove = bool(remove) or value == 0
+        flags = {int(MASK_VALUES.LINE), int(MASK_VALUES.CONT), int(MASK_VALUES.VRAD)}
+        if value not in (flags | {0} if remove else flags):
             raise UserError("Unknown mask value.")
         start, end = sorted((parse_float(start, "start"), parse_float(end, "end")))
+        if value == MASK_VALUES.VRAD and not self._separate_velocity(start, end, remove):
+            return 0
+
+        def change(mask, sel):
+            if not remove:
+                mask[sel] |= value
+            elif value:
+                mask[sel] &= ~value
+            else:
+                mask[sel] = 0
+
         count = 0
         for i in range(len(self.sme.wave)):
             wave = np.asarray(self.sme.wave[i])
             sel = (wave >= start) & (wave <= end)
             if sel.any():
                 segment = np.array(self.sme.mask[i])
-                segment[sel] = value
+                change(segment, sel)
                 self.sme.mask[i] = segment
                 count += int(sel.sum())
         for seg in self.obs:
-            sel = (seg["wave"] >= start) & (seg["wave"] <= end)
-            seg["mask"][sel] = value
+            change(seg["mask"], (seg["wave"] >= start) & (seg["wave"] <= end))
         self.touch()
         return count
+
+    def _velocity_follows(self):
+        """Per segment, True where PySME takes the line pixels for the velocity
+        because no pixel carries the velocity flag. With one velocity per segment
+        it looks at each segment alone, with a common one at all together."""
+        marked = [
+            bool(np.any(np.asarray(self.sme.mask[i]) & MASK_VALUES.VRAD))
+            for i in range(len(self.sme.wave))
+        ]
+        if self.sme.vrad_flag == "each":
+            return [not m for m in marked]
+        return [not any(marked)] * len(marked)
+
+    def _separate_velocity(self, start, end, remove):
+        """Before the first change of the velocity flag, write down what PySME
+        uses so far, the line pixels, so that the change is made to that.
+
+        False if the edit would change nothing; the velocity then keeps
+        following the line mask.
+        """
+        follows = self._velocity_follows()
+        touched, changes = [], False
+        for i in range(len(self.sme.wave)):
+            wave = np.asarray(self.sme.wave[i])
+            sel = (wave >= start) & (wave <= end)
+            if not sel.any():
+                continue
+            touched.append(i)
+            used = MASK_VALUES.LINE if follows[i] else MASK_VALUES.VRAD
+            marked = (np.asarray(self.sme.mask[i])[sel] & used) != 0
+            changes = changes or bool(np.any(marked if remove else ~marked))
+        if not changes:
+            return False
+        everywhere = self.sme.vrad_flag != "each"
+        for i in range(len(self.sme.wave)) if everywhere else touched:
+            if not follows[i]:
+                continue
+            segment = np.array(self.sme.mask[i])
+            segment[(segment & MASK_VALUES.LINE) != 0] |= MASK_VALUES.VRAD
+            self.sme.mask[i] = segment
+            wave = np.asarray(self.sme.wave[i])
+            for seg in self.obs:
+                inside = (seg["wave"] >= wave[0]) & (seg["wave"] <= wave[-1])
+                seg["mask"][inside & ((seg["mask"] & MASK_VALUES.LINE) != 0)] |= MASK_VALUES.VRAD
+        return True
 
     # ------------------------------------------------------------- abundances
 
     def abundance_table(self):
+        """Every element: A(X) as used in the synthesis, and the same relative
+        to the solar reference, [X/Fe] (for Fe itself [Fe/H])."""
         from pysme.abund import elements
 
         pattern = np.array(self.sme.abund._pattern, dtype=float)
         monh = float(self.sme.monh or 0)
+        solar = solar_abundances(self.solar_reference)
+        values = pattern + np.where(np.arange(len(pattern)) >= 2, monh, 0.0)
+        iron = list(elements).index("Fe")
+        feh = values[iron] - solar[iron]
         rows = []
         for z, element in enumerate(elements, start=1):
-            shift = monh if z > 2 else 0.0
-            value = pattern[z - 1] + shift
-            delta = pattern[z - 1] - self.abund_baseline[z - 1]
-            rows.append({"z": z, "el": element, "A": value, "delta": delta})
-        return clean({"elements": rows, "baseline": self.abund_baseline_name, "monh": monh})
+            i = z - 1
+            ratio = math.nan
+            if element not in NO_RATIO:
+                ratio = values[i] - solar[i] - (0.0 if element == "Fe" else feh)
+            rows.append({
+                "z": z, "el": element, "A": values[i],
+                "delta": pattern[i] - self.abund_baseline[i],
+                "solar": solar[i], "ratio": ratio,
+            })
+        return clean({
+            "elements": rows, "baseline": self.abund_baseline_name, "monh": monh,
+            "reference": self.solar_reference, "feh": feh,
+        })
 
-    def set_abundance(self, element, value):
+    def set_abundance(self, element, value, scale="A"):
+        """Change one element. ``value`` is A(X), or with ``scale="ratio"``
+        [X/Fe] ([Fe/H] for Fe). Only that element's A changes: the others keep
+        theirs, so a new Fe moves their [X/Fe]. None restores the baseline."""
         from pysme.abund import elements
 
         if element not in elements or element == "H":
             raise UserError(f"Cannot change the abundance of '{element}'.")
+        if scale not in ("A", "ratio"):
+            raise UserError(f"Unknown abundance scale: {scale}")
         index = list(elements).index(element)
         if value is None or value == "":
             monh = float(self.sme.monh or 0) if index > 1 else 0.0
             target = self.abund_baseline[index] + monh
             if not math.isfinite(target):
                 raise UserError(f"{element} has no baseline value.")
+        elif scale == "ratio":
+            target = self._from_ratio(element, value)
         else:
             target = parse_float(value, f"A({element})")
         self.sme.abund.A[element] = target
         self.touch(stale=True)
+
+    def _from_ratio(self, element, value):
+        """A(X) for a given [X/Fe], or [Fe/H] for Fe."""
+        from pysme.abund import elements
+
+        if element in NO_RATIO:
+            raise UserError(f"{element} is given as A({element}) only.")
+        names = list(elements)
+        label = ratio_label(element)
+        number = parse_float(value, label)
+        solar = solar_abundances(self.solar_reference)
+        sun = solar[names.index(element)]
+        if not math.isfinite(sun):
+            raise UserError(
+                f"{self.solar_reference} has no solar value for {element}. "
+                f"Enter A({element}) instead."
+            )
+        if element == "Fe":
+            return sun + number
+        feh = float(self.sme.abund.A["Fe"]) - solar[names.index("Fe")]
+        if not math.isfinite(feh):
+            raise UserError(f"There is no Fe abundance to give {label} against.")
+        return sun + number + feh
+
+    def set_solar_reference(self, name):
+        """The solar table [X/Fe] is written against. No abundance changes."""
+        if name not in ABUND_PATTERNS:
+            raise UserError(f"Unknown abundance pattern: {name}")
+        if name != self.solar_reference:
+            self.solar_reference = name
+            self.touch()
 
     def apply_abund_pattern(self, name):
         if name not in ABUND_PATTERNS:
@@ -526,6 +859,7 @@ class Session:
         except ValueError as exc:
             raise UserError(str(exc))
         self.sme.abund = abund
+        self.solar_reference = name
         self._remember_abund_baseline()
         self.abund_baseline_name = f"the {name} pattern"
         self.touch(stale=True)
@@ -546,6 +880,14 @@ class Session:
             self.sme.nlte.remove_nlte(element)
         self.touch(stale=True)
 
+    def nlte_off(self):
+        """Compute every element in LTE again."""
+        elements = list(self.sme.nlte.elements)
+        for element in elements:
+            self.sme.nlte.remove_nlte(element)
+        if elements:
+            self.touch(stale=True)
+
     # ----------------------------------------------------------------- queries
 
     def readiness(self):
@@ -560,7 +902,7 @@ class Session:
             synth.append("Choose a model atmosphere grid")
         if self.obs is None:
             fit.append("Import an observed spectrum")
-        if not sme.fitparameters:
+        if not sme.fitparameters and sme.vrad_flag not in VELOCITY_FREE:
             fit.append("Select at least one free parameter")
 
         spans = self.ranges
@@ -610,12 +952,20 @@ class Session:
         params["ipres"] = ipres[0] if ipres.size else 0
         params["iptype"] = sme.iptype
         params["nmu"] = sme.nmu
+        params["mu"] = [float(m) for m in sme.mu]
+        params["mu_default"] = bool(
+            np.allclose(np.sort(sme.mu)[::-1], default_mu(len(sme.mu)), rtol=0, atol=1e-8)
+        )
         vrad = np.atleast_1d(sme.vrad)
         params["vrad"] = vrad[0] if vrad.size else 0
+        params["vrad_each"] = self._velocity_values()
         params["snr"] = self.snr
         params["fitparameters"] = list(sme.fitparameters or [])
 
-        linelist = {"nlines": len(sme.linelist), "file": self.linelist_file}
+        linelist = {
+            "nlines": len(sme.linelist), "file": self.linelist_file,
+            "version": self.linelist_version, "edited": len(self.line_edits),
+        }
         if len(sme.linelist):
             centers = np.asarray(sme.linelist.wlcent, float)
             linelist.update(
@@ -651,7 +1001,8 @@ class Session:
             "segments": segments,
             "has_synth": sme.synth is not None,
             "synth_stale": self.synth_stale,
-            "fit": self.fit_info,
+            "fit": self._fit_shown(),
+            "solar_reference": self.solar_reference,
             "ready": self.readiness(),
             "runs": [{k: r[k] for k in ("id", "label", "kind", "time")} for r in self.runs],
             "notes": self.notes,
@@ -669,20 +1020,41 @@ class Session:
                 "windows under Star > Wavelength."
             )
         both = self._both_scales()
+        velocities = self.synth_vrad if sme.synth is not None else self._velocities(sme)
+        follows = (
+            self._velocity_follows() if self.obs is not None and sme.mask is not None else None
+        )
         for i in range(len(sme.wave)):
-            segment = {"wave": np.asarray(sme.wave[i])}
+            segment = {"wave": np.asarray(sme.wave[i]), "shift": self._doppler(velocities, i)}
             if self.obs is not None and sme.spec is not None:
                 segment["obs"] = np.asarray(sme.spec[i])
                 if sme.uncs is not None and self.has_uncs:
                     segment["uncs"] = np.asarray(sme.uncs[i])
                 if sme.mask is not None:
                     segment["mask"] = np.asarray(sme.mask[i]).astype(int)
+                    # True: the velocity mask shown is the line mask, as PySME uses it.
+                    segment["velocity_follows"] = follows[i]
             if both:
                 for name, values in zip(("synth", "flux"), both[i]):
                     if values is not None:
                         segment[name] = values
             segments.append(segment)
         return clean({"segments": segments})
+
+    @staticmethod
+    def _velocities(sme):
+        """The radial velocity of each segment that PySME shifts the model by."""
+        if sme.vrad_flag == "none" or sme.vrad is None:
+            return None
+        return [float(v) for v in np.atleast_1d(sme.vrad)] or None
+
+    @staticmethod
+    def _doppler(velocities, segment):
+        """Where a rest wavelength appears: its factor in this segment."""
+        if not velocities:
+            return 1.0
+        beta = velocities[min(segment, len(velocities) - 1)] / LIGHT_SPEED
+        return math.sqrt((1 + beta) / (1 - beta))      # as PySME does it
 
     @staticmethod
     def _applied_continuum(sme, observed):
@@ -761,41 +1133,86 @@ class Session:
                     frame = frame[names.str.split().str[0] == words[0]]
         page = frame.iloc[offset:offset + limit]
         rows = [[row[c] for c in columns] for _, row in page.iterrows()]
-        return clean({"total": len(frame), "rows": rows, "columns": columns})
+        # The table's index is the position in the whole list.
+        positions = self.sme.linelist._lines.index.get_indexer(page.index)
+        ids = [int(i) for i in self._ids()[positions]]
+        edited = {i: self.line_edits[i] for i in ids if i in self.line_edits}
+        known = citations.known_keys(self._line_bibtex())
+        long_format = self.sme.linelist.lineformat == "long"
+        terms = [None] * len(page)
+        if {"term_lower", "term_upper"} <= set(page.columns):
+            terms = [
+                f"{low} → {up}" if low and up else None
+                for low, up in zip(map(citations.short_term, page["term_lower"]),
+                                   map(citations.short_term, page["term_upper"]))
+            ]
+        references = [
+            citations.line_references(text if isinstance(text, str) else "", known, long_format)
+            for text in page.get("reference", [""] * len(page))
+        ]
+        return clean({
+            "total": len(frame), "rows": rows, "columns": columns,
+            "ids": ids, "edited": edited, "references": references, "terms": terms,
+        })
+
+    def line_detail(self, line_id):
+        """Everything the list holds on one line, and where each quantity is from."""
+        row = self._row_of(line_id)
+        linelist = self.sme.linelist
+        values = linelist._lines.iloc[row].to_dict()
+        long_format = linelist.lineformat == "long"
+        text = values.get("reference")
+        references = citations.line_references(
+            text if isinstance(text, str) else "",
+            citations.known_keys(self._line_bibtex()), long_format,
+        )
+        edits = self.line_edits.get(int(line_id), {})
+        return clean({
+            "id": int(line_id),
+            "line": f"{values['species']} {values['wlcent']:.4f} Å",
+            "quantities": citations.line_quantities(values, references, edits, long_format),
+            "references": references,
+        })
 
     def strong_lines(self, wmin, wmax, limit=30):
         if len(self.sme.linelist) == 0:
             return {"lines": []}
         full = self.sme.linelist._lines
         inside = ((full["wlcent"] >= wmin) & (full["wlcent"] <= wmax)).to_numpy()
-        # "_row" is the line's position in the unfiltered table of the Line list tab.
-        frame = full[inside].assign(_row=np.flatnonzero(inside))
+        frame = full[inside].assign(_id=self._ids()[inside])
         if "depth" in frame.columns:
             frame = frame.sort_values("depth", ascending=False)
         else:
             frame = frame.sort_values("gflog", ascending=False)
         frame = frame.head(limit)
         return clean({"lines": [
-            {"wave": r["wlcent"], "species": str(r["species"]), "row": int(r["_row"]),
+            {"wave": r["wlcent"], "species": str(r["species"]), "id": int(r["_id"]),
              "depth": r["depth"] if "depth" in frame.columns else None}
             for _, r in frame.iterrows()
         ]})
 
-    def citation(self, output):
+    def citations(self, output):
+        """The references by section, and the same as one text."""
         output = "bibtex" if output == "bibtex" else "plaintext"
         try:
-            return self.sme.citation(output=output)
+            parts = citations.sections(self.sme, self._line_bibtex())
+            return {"sections": parts, "text": citations.as_text(parts, output)}
         except Exception as exc:
-            return f"Could not build the citation list: {exc}"
+            return {"sections": [], "text": f"Could not build the citation list: {exc}"}
 
     # ------------------------------------------------------------------ saving
 
     def _write_meta(self, sme):
         meta = dict(sme.meta or {})
         meta["gui_linelist_file"] = self.linelist_file
+        meta["gui_solar_reference"] = self.solar_reference
         meta["gui_fit_info"] = self.fit_info
         meta["gui_synth_stale"] = self.synth_stale
         meta["gui_synth_continuum"] = self.synth_correction
+        meta["gui_synth_vrad"] = self.synth_vrad
+        meta["gui_line_edits"] = {
+            str(self._row_of(line_id)): was for line_id, was in self.line_edits.items()
+        }
         meta["gui_computed_with"] = self.computed_with
         meta["gui_synth_setup"] = (
             {"ranges": self.ranges, "step": self.step} if self.obs is None else None
@@ -916,10 +1333,31 @@ class Session:
                 if "monh" in names:
                     row["unc_sme"] = row["unc_fit"] = None
             rows.append(row)
-        info = {"parameters": rows, "chisq": results.chisq}
-        if sme.vrad_flag in ("whole", "each"):
-            info["vrad"] = np.atleast_1d(sme.vrad)
-        return clean(info)
+        return clean({
+            "parameters": rows, "chisq": results.chisq,
+            "a_fe": sme.abund.A["Fe"],       # what [X/Fe] of this fit is against
+        })
+
+    def _fit_shown(self):
+        """The last fit, with its abundances also relative to the Sun."""
+        info = self.fit_info
+        if not info or not info.get("parameters"):
+            return info
+        names = [p["name"] for p in info["parameters"]]
+        solar = solar_abundances(self.solar_reference)
+        rows = [
+            {**p, "ratio": fit_ratio(p, info.get("a_fe"), names, solar)}
+            if p["name"].startswith("abund ") else p
+            for p in info["parameters"]
+        ]
+        return {**info, "parameters": rows}
+
+    def _velocity_values(self):
+        """One radial velocity per segment, in km/s."""
+        values = np.atleast_1d(self.sme.vrad)
+        if not values.size:
+            values = np.zeros(self.sme.nseg or 1)
+        return [float(v) for v in values]
 
     def parameter_value(self, name):
         if name.startswith("abund "):
@@ -942,14 +1380,25 @@ class Session:
         names = list(self.sme.fitparameters or [])
         initial = {n: self.parameter_value(n) for n in names}
         restore = self._restore_point(names)
+        velocity_before = self._velocity_values() if self.sme.vrad_flag in VELOCITY_FREE else None
         result = SME_Structure.load(path)
         result.fitparameters = names
         self.sme = result
         self.synth_stale = False
         self.synth_correction = self._applied_continuum(result, self.obs is not None)
+        # PySME leaves a spectrum computed without an observation unshifted.
+        self.synth_vrad = None if self.obs is None else self._velocities(result)
         self.computed_with = software_versions()
         if kind == "fit":
             self.fit_info = self._read_fit_results(result, initial)
+            if velocity_before is not None:
+                # PySME finds it apart from the other parameters and, on the
+                # paths used here, computes no uncertainty for it.
+                self.fit_info["velocity"] = clean({
+                    "initial": velocity_before, "value": self._velocity_values(),
+                    "each": result.vrad_flag == "each",
+                })
+                restore["vrad"] = velocity_before
             self.fit_info["restore"] = clean(restore)
             if self.obs is not None and result.mask is not None:
                 # The solver marks zero-uncertainty pixels bad; keep our copy in step.
@@ -969,6 +1418,8 @@ class Session:
         for name, value in restore.items():
             if name.startswith("abund "):
                 self.sme.abund.pattern[name.split()[1]] = value
+            elif name == "vrad":
+                self.sme.vrad = np.resize(np.array(value, float), self.sme.nseg or 1)
             else:
                 setattr(self.sme, name, value)
         self.fit_info = None

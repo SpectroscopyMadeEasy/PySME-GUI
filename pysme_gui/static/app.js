@@ -82,7 +82,7 @@ let seenRevision = -1;
 let logSeq = 0;
 let pollTimer = null;
 let lastJobKey = "";
-const ui = { prereleases: false, installChoice: null, ownDraft: null, advancedOpen: null, tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null, flux: false };
+const ui = { prereleases: false, installChoice: null, ownDraft: null, advancedOpen: null, tool: "zoom", drawer: "results", linePage: 0, lineQuery: "", element: "Fe", compare: null, flux: false, line: null, hiddenCurves: new Set(), removeWhat: 0, velocityMode: "whole", view: "spectrum", abundScale: "A", gridChoice: {} };
 
 /* All changes are sent one after another, so that "type a value, then press
    Synthesize" always reaches PySME in that order. */
@@ -128,6 +128,7 @@ async function apply(state) {
       ui.compare = null;
       compareData = null;
     }
+    await refreshChosenLine();      // before the plot, which marks it
   }
   renderTop();
   renderJob();
@@ -135,8 +136,11 @@ async function apply(state) {
   renderReadiness();
   if (changed) {
     renderPlot();
+    renderPattern();
     renderDrawer();
   }
+  $("#solar-reference").value = S.solar_reference;
+  renderLineEditor();
   if (S.log_seq > logSeq) await pullLog();
   schedulePoll();
 }
@@ -171,6 +175,9 @@ function renderTop() {
   $("#forms").disabled = busy;
   const name = S.path ? S.path.split("/").pop() : "Untitled";
   document.title = `${name}${S.dirty ? " •" : ""} — PySME`;
+  const badge = $("#stage-badge");
+  badge.hidden = S.release.stage === "stable";
+  badge.textContent = S.release.stage;           // "alpha" or "beta"
   const latest = S.update.latest;
   $("#update-dot").hidden = !(latest && (latest.pysme_new || latest.gui_newer));
 }
@@ -245,8 +252,11 @@ function renderReadiness() {
 
 /* ------------------------------------------------------------------- inputs */
 
+const velocitiesDiffer = () => new Set((S.params.vrad_each || []).map((v) => v.toPrecision(8))).size > 1;
+
 function currentValue(name) {
   if (name.startsWith("atmo.")) return S.atmo[name.slice(5)] ?? "auto";
+  if (name === "vrad" && velocitiesDiffer()) return null;
   return S.params[name];
 }
 
@@ -277,9 +287,15 @@ function writeParam(input) {
     }
     input.value = String(value);
   } else {
-    const text = String(typeof value === "number" ? Number(value.toPrecision(8)) : value ?? "");
+    const short = (v) => (typeof v === "number" ? Number(v.toPrecision(8)) : v ?? "");
+    const text = Array.isArray(value) ? value.map(short).join(", ") : String(short(value));
     if (input.value !== text) input.value = text;
   }
+}
+
+function renderMuState() {
+  $("#mu-state").textContent = S.params.mu_default ? "(default)" : "(your own)";
+  $("#mu-default").disabled = S.params.mu_default;
 }
 
 /* Every synthesis gives both scales, so this only chooses what is shown. */
@@ -308,7 +324,12 @@ function renderForms(rebuild, force = false) {
     writeParam(input);
   }
   renderFluxScale();
-  $("#vrad-input").disabled = S.params.vrad_flag === "none";
+  renderMuState();
+  // One box for all segments; say so when they differ, as after fitting each.
+  const velocities = velocitiesDiffer() ? S.params.vrad_each.map((v) => v.toFixed(3)).join(", ") : "";
+  $('[data-param="vrad"]').placeholder = velocities ? "per segment" : "";
+  $("#vrad-hint").hidden = !velocities;
+  $("#vrad-hint").textContent = velocities ? `v_rad of the segments: ${velocities} km/s. A value typed here is used for all.` : "";
   $("#snr-block").hidden = !(S.observation && !S.observation.has_uncs);
   const ip = S.params.iptype;
   $("#ip-hint").textContent = S.params.ipres > 0
@@ -449,6 +470,9 @@ function renderLinelistCard() {
       h("div", {}, `${fixed(list.wmin, 2)} – ${fixed(list.wmax, 2)} Å (${list.medium}), ${list.format} format`),
       h("div", { class: "hint" }, list.file ? list.file.split("/").pop() : "stored in the SME file"));
     card.lastChild.title = list.file || "";
+    if (list.edited) {
+      card.append(h("div", { class: "edited-note" }, `${list.edited} line${list.edited > 1 ? "s" : ""} edited here (see the Line list tab). The file is unchanged.`));
+    }
   }
   card.append(h("button", { type: "button", "data-cmd": "linelist" }, "Load VALD list…"));
 }
@@ -472,6 +496,22 @@ function renderFitChips() {
       "aria-pressed": String(chosen.includes(name)),
       onclick: () => toggleFit(name, !chosen.includes(name)),
     }, label)));
+  // v_rad is chosen like any other parameter. PySME keeps that apart, in
+  // vrad_flag, together with whether the segments share one value.
+  const free = velocityFree();
+  if (free) ui.velocityMode = S.params.vrad_flag;
+  $("#fit-basic").append(h("button", {
+    type: "button", class: "chip" + (free ? " on" : ""), "aria-pressed": String(free), "data-chip": "vrad",
+    title: "Radial velocity of the observed spectrum. A fit finds it; a synthesis uses the value on the Star tab.",
+    onclick: () => send("params", { values: { vrad_flag: free ? "fix" : ui.velocityMode } }),
+  }, "v_rad"));
+  const modes = $("#vrad-mode");
+  modes.hidden = !free;
+  for (const button of $$("button", modes)) {
+    const on = button.dataset.vrad === S.params.vrad_flag;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
   $("#fit-abunds").replaceChildren(...chosen.filter((n) => n.startsWith("abund ")).map((name) =>
     h("button", { type: "button", class: "chip on", title: "Remove", onclick: () => toggleFit(name, false) }, `A(${name.slice(6)}) ×`)));
 }
@@ -485,35 +525,53 @@ let plotKey = "";
 let lineTimer = null;
 let currentLines = [];
 let linesBelongTo = "";       // the plot (see plotKey) those labels were chosen for
+let plotShapes = [];
+let plotCurves = [];          // what the line above the plot lists
+
+/* PySME's mask is a set of flags, and a pixel can carry several: line (it is
+   fitted), continuum and radial velocity. 0 means the pixel is not used. */
+const MASK_FLAGS = [[1, "--m-line"], [2, "--m-cont"], [4, "--m-vrad"]];   // top to bottom
+const MASK_BAND = 0.0255;        // height of the strip, of the panel
+
+/* The velocity mask matters, and is shown, only while a fit is to find v_rad. */
+const velocityFree = () => ["whole", "each"].includes(S?.params.vrad_flag);
+
+/* The flags a strip shows. Where no pixel carries the velocity flag, PySME takes
+   the line pixels for the velocity, so those are shown as its mask. */
+function shownMask(segment) {
+  const free = velocityFree();
+  return segment.mask.map((m) => (m & 3) | (free && m & (segment.velocity_follows ? 1 : 4) ? 4 : 0));
+}
 
 /* The labels as Plotly wants them, in the colours of the theme now shown. */
 const lineAnnotations = (lines) => lines.map((line) => ({
-  x: line.wave, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: line.species,
+  x: line.x, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: line.species,
   textangle: -90, showarrow: false, font: { size: 10, color: css("--muted") },
-  hovertext: `${line.species} ${line.wave.toFixed(3)} Å<br>click: show in line list`,
+  hovertext: `${line.species} ${line.wave.toFixed(3)} Å`,
   captureevents: true,
 }));
 
+/* One strip under the data. Where pixels carry several flags, it is divided
+   into as many bands, line on top, then continuum, then velocity. Excluded
+   pixels (0) have no strip: they show as a gap. */
 function maskStrips(segment) {
-  // Contiguous runs of equal mask value, drawn as a thin strip under the data.
-  // Excluded pixels (0) get no strip: they show as a gap.
-  const colours = { 1: css("--m-line"), 2: css("--m-cont") };
   const shapes = [];
-  const { wave, mask } = segment;
-  if (!mask) return shapes;
+  const { wave } = segment;
+  if (!segment.mask) return shapes;
+  const mask = shownMask(segment);
   let start = 0;
   for (let i = 1; i <= mask.length; i++) {
-    if (i === mask.length || mask[i] !== mask[start]) {
-      const value = mask[start];
-      const key = value === 0 ? 0 : value & 2 ? 2 : 1;
-      const left = start === 0 ? wave[0] : (wave[start - 1] + wave[start]) / 2;
-      const right = i === mask.length ? wave[i - 1] : (wave[i - 1] + wave[i]) / 2;
-      if (key !== 0) shapes.push({
-        type: "rect", xref: "x", yref: "y domain", x0: left, x1: right, y0: 0, y1: 0.025,
-        fillcolor: colours[key], opacity: key === 1 ? 0.55 : 0.95, line: { width: 0 },
-      });
-      start = i;
-    }
+    if (i < mask.length && mask[i] === mask[start]) continue;
+    const kinds = MASK_FLAGS.filter(([flag]) => mask[start] & flag);
+    const height = MASK_BAND / kinds.length;
+    kinds.forEach(([, colour], k) => shapes.push({
+      type: "rect", xref: "x", yref: "y domain",
+      x0: start === 0 ? wave[0] : (wave[start - 1] + wave[start]) / 2,
+      x1: i === mask.length ? wave[i - 1] : (wave[i - 1] + wave[i]) / 2,
+      y0: MASK_BAND - (k + 1) * height, y1: MASK_BAND - k * height,
+      fillcolor: css(colour), opacity: 0.95, line: { width: 0 },
+    }));
+    start = i;
   }
   return shapes;
 }
@@ -578,6 +636,19 @@ function buildPlot() {
     }
   }
 
+  // The curves of the line above the plot, which is also its legend. The
+  // uncertainty band goes with the residuals.
+  plotCurves = ["observed", "synthetic", "earlier", "O − S"]
+    .map((meta) => traces.find((t) => t.meta === meta))
+    .filter(Boolean)
+    .map((t) => ({
+      meta: t.meta, colour: t.line.color, dashed: t.line.dash === "dot",
+      name: t.meta === "O − S" ? t.meta : t.meta === "synthetic" ? t.name
+        : t.meta === "earlier" ? t.name.trim().split(/\s+/).slice(0, 2).join(" ") : t.meta,
+      title: t.meta === "earlier" ? t.name : "",
+    }));
+  for (const trace of traces) trace.visible = !ui.hiddenCurves.has(trace.meta || "O − S");
+
   const axis = {
     gridcolor: css("--grid"), zerolinecolor: css("--border"), linecolor: css("--border"),
     tickfont: { color: css("--muted"), size: 11 }, title: { font: { color: css("--muted"), size: 12 } },
@@ -599,9 +670,9 @@ function buildPlot() {
   const layout = {
     uirevision: plotKey,
     paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"), font: { color: css("--text") },
-    margin: { l: 58, r: 14, t: 28, b: 40 },
+    margin: { l: 58, r: 14, t: 24, b: 40 },     // t: room for Plotly's buttons
     separators: ".",          // no thousands comma: wavelengths read 6438.5
-    showlegend: true,
+    showlegend: false,        // see renderLegend; exported figures switch it on
     legend: { orientation: "h", x: 0, xanchor: "left", y: 1.0, yanchor: "bottom", font: { size: 11 } },
     hovermode: false,          // see wireCrosshair; line labels keep their own hover
     hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--border"), font: { color: css("--text") } },
@@ -611,7 +682,7 @@ function buildPlot() {
     xaxis: { ...axis, title: { ...axis.title, text: "Wavelength (Å)" }, showspikes: false, anchor: showResid ? "y2" : "y", exponentformat: "none", tickformat: "" , hoverformat: ".4f" },
     // The other scale needs its own height; the wavelength zoom stays.
     yaxis: { ...axis, ...bigNumbers, uirevision: `${plotKey}|${surface}`, title: { ...axis.title, text: fluxTitle }, domain: showResid ? [0.3, 1] : [0, 1], range: yRange },
-    shapes,
+    shapes: [...shapes, ...lineMarks()],
     // Redraw with the labels already there; without them they would vanish at every
     // redraw, such as after each abundance change, until looked up again.
     annotations: $("#show-lines").checked && linesBelongTo === plotKey ? lineAnnotations(currentLines) : [],
@@ -619,6 +690,7 @@ function buildPlot() {
     selectionrevision: S.revision,
   };
   if (showResid) layout.yaxis2 = { ...axis, ...bigNumbers, domain: [0, 0.23], title: { ...axis.title, text: "O − S" } };
+  plotShapes = shapes;      // the mask strips, to which drawLineMark adds the mark
   return { traces, layout };
 }
 
@@ -632,6 +704,7 @@ function renderPlot() {
   const graph = $("#plot");
   graph.style.visibility = empty ? "hidden" : "visible";
   renderPlotSelectors();
+  $("#readout").hidden = empty;
   if (empty) {
     plotKey = "";
     return;
@@ -639,6 +712,7 @@ function renderPlot() {
   // Keep the user's zoom while only the synthetic spectrum changes.
   plotKey = spectrum.segments.map((s) => `${s.wave[0]}-${s.wave[s.wave.length - 1]}`).join("|") + ($("#show-resid").checked ? "r" : "");
   const { traces, layout } = buildPlot();
+  renderLegend();
   const isNew = !graph._pysmeReady;
   return Plotly.react(graph, traces, layout, {
     responsive: true, displaylogo: false, scrollZoom: true,
@@ -649,13 +723,16 @@ function renderPlot() {
       graph.on("plotly_selected", onSelected);
       graph.on("plotly_clickannotation", (event) => {
         const line = currentLines[event.index];
-        if (line) revealLine(line.row);
+        if (line) chooseLine(line.id, true);
       });
       graph.on("plotly_relayout", (event) => {
-        if (Object.keys(event).some((k) => k.startsWith("xaxis"))) scheduleLineLabels();
+        if (!Object.keys(event).some((k) => k.startsWith("xaxis"))) return;
+        scheduleLineLabels();
+        renderLineNote();       // whether the chosen line is still in view
       });
     }
     scheduleLineLabels();
+    renderLineNote();
   });
 }
 
@@ -672,8 +749,10 @@ async function updateLineLabels() {
   if ($("#show-lines").checked && S.linelist.nlines) {
     const width = graph._fullLayout.width || 800;
     const limit = Math.max(6, Math.floor(width / 26));
+    // The list has rest wavelengths; the plot may be shifted by a velocity.
+    const shift = spectrum.segments.find((s) => s.wave[s.wave.length - 1] >= a && s.wave[0] <= b)?.shift || 1;
     try {
-      lines = (await request(`lines?wmin=${a}&wmax=${b}&limit=${limit}`)).lines;
+      lines = (await request(`lines?wmin=${a / shift}&wmax=${b / shift}&limit=${limit}`)).lines;
     } catch (error) {
       return;
     }
@@ -682,9 +761,10 @@ async function updateLineLabels() {
   const spacing = (b - a) / Math.max(1, (graph._fullLayout.width - 80) / 13);
   const placed = [];
   for (const line of lines) {
-    if (placed.every((p) => Math.abs(p.wave - line.wave) > spacing)) placed.push(line);
+    line.x = plotPosition(line.wave);
+    if (placed.every((p) => Math.abs(p.x - line.x) > spacing)) placed.push(line);
   }
-  const key = (list) => JSON.stringify(list.map((p) => [p.wave, p.species, p.row]));
+  const key = (list) => JSON.stringify(list.map((p) => [p.x, p.wave, p.species, p.id]));
   if (key(placed) === key(currentLines) && graph.layout.annotations?.length === placed.length) return;
   currentLines = placed;
   linesBelongTo = plotKey;
@@ -694,7 +774,24 @@ async function updateLineLabels() {
 async function onSelected(event) {
   if (ui.tool === "zoom" || !event || !event.range || !event.range.x) return;
   const [start, end] = event.range.x;
-  await send("mask", { start, end, value: Number(ui.tool) });
+  const remove = ui.tool === "0";
+  await send("mask", { start, end, value: remove ? ui.removeWhat : Number(ui.tool), remove });
+}
+
+const REMOVE_LABELS = { 0: "Remove mask", 1: "Remove line mask", 2: "Remove continuum mask", 4: "Remove velocity mask" };
+
+/* The velocity tool and its menu entry come and go with v_rad as a free
+   parameter; the remove button names what it takes off. */
+function renderMaskTools() {
+  const free = velocityFree();
+  $("#tool-vrad").hidden = !free;
+  $('#menu-remove [data-remove="4"]').hidden = !free;
+  if (!free && ui.tool === "4") setTool("zoom");
+  if (!free && ui.removeWhat === 4) ui.removeWhat = 0;
+  $("#remove-label").textContent = REMOVE_LABELS[ui.removeWhat];
+  for (const item of $$("#menu-remove [data-remove]")) {
+    item.setAttribute("aria-checked", String(Number(item.dataset.remove) === ui.removeWhat));
+  }
 }
 
 function renderPlotSelectors() {
@@ -708,15 +805,17 @@ function renderPlotSelectors() {
   $("#compare").value = ui.compare === null ? "" : String(ui.compare);
   $("#show-resid").disabled = showingFlux();
   const canMask = !showingFlux() && spectrum.segments.some((s) => s.obs);
-  for (const button of $$("#tools button")) {
-    if (button.dataset.tool !== "zoom") button.disabled = !canMask;
-  }
+  for (const button of $$("#tools button")) button.disabled = !canMask;
   if (!canMask && ui.tool !== "zoom") setTool("zoom", false);
+  renderMaskTools();
 }
 
 function setTool(tool, redraw = true) {
   ui.tool = tool;
-  for (const button of $$("#tools button")) button.classList.toggle("active", button.dataset.tool === tool);
+  for (const button of $$("#tools [data-tool]")) {
+    button.classList.toggle("active", button.dataset.tool === tool);
+    button.setAttribute("aria-pressed", String(button.dataset.tool === tool));
+  }
   const graph = $("#plot");
   if (redraw && graph._pysmeReady) Plotly.relayout(graph, { dragmode: tool === "zoom" ? "zoom" : "select" });
 }
@@ -751,9 +850,29 @@ function renderDrawer() {
   if (ui.drawer === "results") renderResults();
   else if (ui.drawer === "lines") renderLines();
   else if (ui.drawer === "abund") renderAbundances();
-  else if (ui.drawer === "nlte") renderNlte();
   else if (ui.drawer === "cite") renderCitations();
   else if (ui.drawer === "log") $(".drawer-body").scrollTop = $(".drawer-body").scrollHeight;
+}
+
+/* v_rad in the table of results: one row, or one per segment. */
+function velocityRows(velocity, extraCell) {
+  if (!velocity) return [];
+  const rows = velocity.each && velocity.value.length > 1 ? velocity.value.length : 1;
+  const notGiven = () => h("td", { class: "hint", title: "PySME computes no uncertainty for v_rad here" }, "not given");
+  return Array.from({ length: rows }, (_, i) => h("tr", {},
+    h("td", {}, rows > 1 ? `v_rad (km/s), segment ${i + 1}` : "v_rad (km/s)"),
+    h("td", {}, fmt(velocity.initial[i] ?? velocity.initial[0])),
+    h("td", {}, h("b", {}, fixed(velocity.value[i], 3))), notGiven(), notGiven(), extraCell ? h("td", {}) : null));
+}
+
+/* A fitted abundance relative to the Sun. */
+function ratioCell(parameter) {
+  const ratio = parameter.ratio;
+  if (!ratio) return h("td", { class: "hint" }, parameter.name.startsWith("abund ") ? "–" : "");
+  const errors = [[ratio.unc_fit, "ls"], [ratio.unc_sme, "SME"]]
+    .filter(([value]) => value !== null).map(([value, kind]) => `± ${fmt(value, 2)} ${kind}`);
+  return h("td", { class: "ratio" }, h("div", {}, `${ratio.label} `, h("b", {}, signed(ratio.value, 3))),
+    h("div", { class: "hint" }, errors.length ? errors.join(", ") : "σ not given"));
 }
 
 function renderResults() {
@@ -763,15 +882,32 @@ function renderResults() {
   const fit = S.fit;
   if (fit) {
     if (fit.outdated) main.append(h("p", { class: "hint" }, "A synthesis was run after this fit, so the plot may not show the fitted model."));
+    const ratios = fit.parameters.some((p) => p.ratio);
     main.append(h("table", {},
       h("thead", {}, h("tr", {},
         h("th", {}, "Parameter"), h("th", {}, "Start"), h("th", {}, "Best fit"),
         h("th", { title: "From the least-squares covariance matrix" }, "σ (least squares)"),
-        h("th", { title: "PySME's estimate from the distribution of residuals; usually larger" }, "σ (SME)"))),
+        h("th", { title: "PySME's estimate from the distribution of residuals; usually larger" }, "σ (SME)"),
+        ratios ? h("th", { title: `Against the ${S.solar_reference} Sun` }, "[X/Fe]") : null)),
       h("tbody", {}, fit.parameters.map((p) => h("tr", {},
         h("td", {}, parameterLabel(p.name)), h("td", {}, fmt(p.initial)),
-        h("td", {}, h("b", {}, fmt(p.value, 5))), h("td", {}, fmt(p.unc_fit, 2)), h("td", {}, fmt(p.unc_sme, 2)))))));
-    const extra = [`reduced χ² = ${fmt(fit.chisq, 3)}`];
+        h("td", {}, h("b", {}, fmt(p.value, 5))), h("td", {}, fmt(p.unc_fit, 2)), h("td", {}, fmt(p.unc_sme, 2)),
+        ratios ? ratioCell(p) : null)),
+      velocityRows(fit.velocity, ratios))));
+    if (ratios) {
+      const joint = fit.parameters.some((p) => p.name === "abund Fe");
+      main.append(h("p", { class: "hint" },
+        `[X/Fe] is against the ${S.solar_reference} Sun. Its errors leave out those of Fe and of the solar values.` +
+        (joint ? " Fe was fitted too, so the other elements get no [X/Fe] error here." : "")));
+    }
+    if (fit.velocity) {
+      main.append(h("p", { class: "hint" },
+        "PySME finds v_rad on its own, by matching the model to the observation each time it computes one. " +
+        "It is not part of the least-squares fit, and PySME gives no uncertainty for it."));
+    }
+    const extra = [];
+    if (fit.chisq !== null && fit.chisq !== undefined) extra.push(`reduced χ² = ${fmt(fit.chisq, 3)}`);
+    // Files saved by 0.3.0a1 keep the velocity in this form.
     if (fit.vrad) extra.push(`v_rad = ${fit.vrad.map((v) => fixed(v, 3)).join(", ")} km/s`);
     main.append(h("div", { class: "row" }, h("span", {}, extra.join("    ")), h("span", { class: "spacer" }),
       fit.restore && h("button", { onclick: () => send("revert_fit"), title: "Restore the free parameters to their values before this fit" }, "Restore starting values")));
@@ -800,21 +936,168 @@ function renderResults() {
 const LINES_PER_PAGE = 100;
 let lineRender = 0;
 
-/* Open the Line list tab at one line; "row" counts in the unfiltered list. */
-function revealLine(row) {
-  ui.lineQuery = "";
-  $("#line-search").value = "";
-  ui.linePage = Math.floor(row / LINES_PER_PAGE);
-  ui.chosenLine = { row, list: lineListKey() };
-  ui.scrollToLine = true;
-  const drawer = $("#drawer");
-  drawer.classList.remove("collapsed");
-  if (drawer.offsetHeight < 180) drawer.style.height = "250px";
-  showDrawer("lines");
-  resizePlot();
+const LINE_TITLES = { species: "Species", wlcent: "λ (Å)", excit: "χ (eV)", gflog: "log gf", gamrad: "Rad.", gamqst: "Stark", gamvw: "van der Waals", depth: "VALD depth" };
+const LINE_DIGITS = { wlcent: 4, excit: 3, gflog: 3, gamrad: 2, gamqst: 2, gamvw: 3, depth: 3 };
+
+/* --------------------------------------------------------- the chosen line */
+
+/* One line can be chosen, in the table or by its label: it is marked in the plot
+   and its data can be edited. Lines are known by an id that stays with them when
+   a new wavelength moves them to another row. */
+let lineChoice = 0;
+
+/* With "reveal", the Line list tab is opened at that line. */
+async function chooseLine(id, reveal = false) {
+  const mine = ++lineChoice;
+  let line = null;
+  if (id !== null) {
+    try {
+      line = await request("linelist/line?id=" + id);
+    } catch (error) {
+      toast(error.message, "error");
+      return;
+    }
+    if (mine !== lineChoice) return;
+  }
+  ui.line = line;
+  ui.lineList = S.linelist.version;
+  renderLineEditor(true);
+  drawLineMark();
+  if (reveal && line) {
+    ui.lineQuery = "";
+    $("#line-search").value = "";
+    ui.linePage = Math.floor(line.row / LINES_PER_PAGE);
+    ui.scrollToLine = true;
+    const drawer = $("#drawer");
+    drawer.classList.remove("collapsed");
+    showDrawer("lines");
+    makeRoomForTable();
+    resizePlot();
+  } else {
+    markLineRows();
+    if (line) makeRoomForTable();
+    keepChosenRowInSight(false);   // the editor above the table may have pushed it out
+  }
 }
 
-const lineListKey = () => `${S.linelist.file}|${S.linelist.nlines}`;
+/* The editor takes room from the table. If that leaves only a row or two, the
+   panel grows; the plot gets less height but shows the same range. */
+function makeRoomForTable() {
+  const scroller = $(".line-scroll");
+  if (ui.drawer !== "lines" || !scroller.offsetParent) return;
+  const missing = 130 - scroller.offsetHeight;
+  if (missing <= 0) return;
+  const drawer = $("#drawer");
+  const limit = $("#work").clientHeight - 290;      // leaves the plot readable
+  drawer.style.height = Math.min(Math.max(limit, drawer.offsetHeight), drawer.offsetHeight + missing) + "px";
+}
+
+async function refreshChosenLine() {
+  if (!ui.line) return;
+  if (S.linelist.version !== ui.lineList) {
+    ui.line = null;                 // another list was loaded
+    return;
+  }
+  try {
+    ui.line = await request("linelist/line?id=" + ui.line.id);
+  } catch (error) {
+    ui.line = null;
+  }
+}
+
+/* Where a rest wavelength appears in the spectrum shown: PySME moves the model
+   by the radial velocity, segment by segment. */
+function plotPosition(wave) {
+  for (const segment of spectrum.segments) {
+    const x = wave * (segment.shift || 1);
+    if (x >= segment.wave[0] && x <= segment.wave[segment.wave.length - 1]) return x;
+  }
+  return wave * (spectrum.segments[0]?.shift || 1);
+}
+
+const lineMarks = () => (!ui.line ? [] : [{
+  type: "line", xref: "x", yref: "paper", y0: 0, y1: 1,
+  x0: plotPosition(ui.line.values.wlcent), x1: plotPosition(ui.line.values.wlcent),
+  line: { color: css("--accent"), width: 1.2, dash: "dash" },
+}]);
+
+/* Draw or remove the mark; the view stays as it is. */
+function drawLineMark() {
+  const graph = $("#plot");
+  if (graph._pysmeReady && spectrum.segments.length) Plotly.relayout(graph, { shapes: [...plotShapes, ...lineMarks()] });
+}
+
+const readValue = (value) => String(Number(value.toPrecision(10)));
+
+function writeLineInput(input) {
+  const value = ui.line.values[input.dataset.line];
+  const text = value === null || value === undefined ? "" : readValue(value);
+  // The arrows count from the "value" attribute. Without this, -1.909 would step
+  // to -1.9 instead of -1.809.
+  input.setAttribute("value", text);
+  if (input.value !== text) input.value = text;
+}
+
+/* "all" also overwrites what is being typed, as when another line is chosen.
+   The boxes are never replaced, so their arrows keep working. */
+function renderLineEditor(all = false) {
+  const box = $("#line-editor");
+  box.hidden = !ui.line;
+  if (!ui.line) {
+    markLineRows();
+    return;
+  }
+  const { species, values, original } = ui.line;
+  $("#line-name").textContent = `${species} ${values.wlcent.toFixed(4)} Å`;
+  for (const input of $$("[data-line]")) {
+    const column = input.dataset.line;
+    input.parentElement.hidden = !(column in values);
+    input.parentElement.classList.toggle("edited", column in original);
+    input.disabled = jobRunning();
+    if (all) {
+      delete input.dataset.pending;
+      delete input.dataset.editing;
+    } else if (input.dataset.pending || (input.dataset.editing && input === document.activeElement)) continue;
+    if (column in values) writeLineInput(input);
+  }
+  $("#line-reset").disabled = jobRunning() || !Object.keys(original).length;
+  $("#line-reset-all").hidden = !S.linelist.edited;
+  $("#line-reset-all").disabled = jobRunning();
+  $("#line-reset-all").textContent = `Restore all (${S.linelist.edited})`;
+  renderLineNote();
+}
+
+/* Clicking a line never moves the plot, so say when its mark cannot be seen. */
+function renderLineNote() {
+  if (!ui.line) return;
+  const range = $("#plot")._fullLayout?.xaxis.range.map(Number);
+  let outside = false;
+  if (range && spectrum.segments.length) {
+    const x = plotPosition(ui.line.values.wlcent);
+    outside = x < range[0] || x > range[1];
+  }
+  $("#line-note").textContent = outside ? "This line is outside the wavelengths now shown." : "";
+}
+
+function markLineRows() {
+  for (const row of $$("#line-table tbody tr")) {
+    row.classList.toggle("chosen", Number(row.dataset.id) === ui.line?.id);
+  }
+}
+
+/* Only the table scrolls; scrollIntoView would move the window's layout too. */
+function keepChosenRowInSight(centre) {
+  const row = $("#line-table tr.chosen");
+  const scroller = $(".line-scroll");
+  if (!row) return false;
+  const at = row.getBoundingClientRect();
+  const frame = scroller.getBoundingClientRect();
+  const top = frame.top + ($("#line-table thead")?.offsetHeight || 0);
+  if (centre || at.top < top || at.bottom > frame.bottom) {
+    scroller.scrollTop += at.top - top - (frame.bottom - top - at.height) / 2;
+  }
+  return true;
+}
 
 async function renderLines() {
   const limit = LINES_PER_PAGE;
@@ -822,27 +1105,33 @@ async function renderLines() {
   const offset = ui.linePage * limit;
   const data = await request(`linelist?offset=${offset}&limit=${limit}&q=${encodeURIComponent(ui.lineQuery)}`);
   if (mine !== lineRender) return;        // a newer request is on its way
-  const chosen = !ui.lineQuery && ui.chosenLine?.list === lineListKey() ? ui.chosenLine.row - offset : -1;
-  const titles = { species: "Species", wlcent: "λ (Å)", excit: "χ (eV)", gflog: "log gf", gamrad: "Rad.", gamqst: "Stark", gamvw: "van der Waals", depth: "VALD depth" };
-  const digits = { wlcent: 4, excit: 3, gflog: 3, gamrad: 2, gamqst: 2, gamvw: 3, depth: 3 };
+  const cell = (value, column, was) => h("td", {
+    class: was && column in was ? "edited" : null,
+    title: was && column in was ? `Loaded with ${readValue(was[column])}` : null,
+  }, column in LINE_DIGITS ? fixed(value, LINE_DIGITS[column]) : value);
+  /* The rest of what the list holds on a line, with where each value is from. */
+  const sources = (id, line) => h("td", { class: "refs", onclick: (event) => event.stopPropagation() },
+    h("button", { type: "button", class: "link", "aria-label": `All data and references of ${line}`, onclick: () => showSources(id) }, "ref"));
+  const terms = (data.terms || []).some(Boolean);       // the short format has none
   $("#line-table").replaceChildren(
-    h("thead", {}, h("tr", {}, data.columns.map((c) => h("th", {}, titles[c] || c)))),
-    h("tbody", {}, data.rows.map((row, k) => h("tr", {
-      class: k === chosen ? "chosen" : null,
-      title: "Zoom the plot to this line",
-      onclick: () => {
-        const wave = row[data.columns.indexOf("wlcent")];
-        zoomTo(wave - 1, wave + 1);
-      },
-    }, row.map((value, i) => h("td", {}, data.columns[i] in digits ? fixed(value, digits[data.columns[i]]) : value))))));
-  const marked = $("#line-table tr.chosen");
-  if (ui.scrollToLine && marked) {
-    ui.scrollToLine = false;
-    // Only the panel scrolls; scrollIntoView would move the window's layout too.
-    const body = $(".drawer-body");
-    body.scrollTop += marked.getBoundingClientRect().top - body.getBoundingClientRect().top -
-      (body.clientHeight - marked.offsetHeight) / 2;
+    h("thead", {}, h("tr", {}, data.columns.map((c) => h("th", {}, LINE_TITLES[c] || c)),
+      terms ? h("th", {}, "Term") : null, h("th", {}, "Ref"))),
+    h("tbody", {}, data.rows.map((row, k) => {
+      const id = data.ids[k];
+      const value = (column) => row[data.columns.indexOf(column)];
+      return h("tr", {
+        "data-id": String(id),
+        onclick: () => chooseLine(ui.line?.id === id ? null : id),
+      }, row.map((v, i) => cell(v, data.columns[i], data.edited[id])),
+      terms ? h("td", {}, data.terms[k] || "–") : null,
+      sources(id, `${value("species")} ${value("wlcent").toFixed(4)} Å`));
+    })));
+  markLineRows();
+  if (ui.lineScroll !== undefined && ui.drawer === "lines") {
+    $(".line-scroll").scrollTop = ui.lineScroll;
+    ui.lineScroll = undefined;
   }
+  if (ui.scrollToLine && keepChosenRowInSight(true)) ui.scrollToLine = false;
   const pages = Math.max(1, Math.ceil(data.total / limit));
   $("#line-page").textContent = `${data.total.toLocaleString()} lines · page ${ui.linePage + 1}/${pages}`;
   $("#line-prev").disabled = ui.linePage === 0;
@@ -875,61 +1164,182 @@ function gridsFor(element) {
   return list;
 }
 
+/* The grid the switch of an element would turn on: the one in use, else the one
+   chosen in the editor, else PySME's own. */
+function chosenGrid(element) {
+  if (S.nlte.elements.includes(element) && S.nlte.grids[element]) return S.nlte.grids[element];
+  return ui.gridChoice[element] || S.nlte.grids[element] || options.nlte_defaults[element] || gridsFor(element)[0];
+}
+
+function setNlte(element, enabled, grid = chosenGrid(element)) {
+  return send("nlte", { element, enabled, grid });
+}
+
 function nlteControls(element) {
   const enabled = S.nlte.elements.includes(element);
   const grids = gridsFor(element);
   if (!grids.length) return h("p", { class: "hint" }, `PySME has no NLTE grid for ${element}.`);
   const select = h("select", { "aria-label": `NLTE grid for ${element}`, disabled: jobRunning() },
     grids.map((g) => h("option", { value: g }, g)));
-  select.value = S.nlte.grids[element] || options.nlte_defaults[element] || grids[0];
+  select.value = chosenGrid(element);
   select.addEventListener("change", () => {
-    if (enabled) send("nlte", { element, enabled: true, grid: select.value });
+    ui.gridChoice[element] = select.value;
+    if (enabled) setNlte(element, true, select.value);
   });
   return h("div", {},
     h("label", { class: "check" },
-      h("input", { type: "checkbox", checked: enabled, disabled: jobRunning(), onchange: (e) => send("nlte", { element, enabled: e.target.checked, grid: select.value }) }),
+      h("input", { type: "checkbox", checked: enabled, disabled: jobRunning(), onchange: (e) => setNlte(element, e.target.checked, select.value) }),
       " NLTE"),
     select);
 }
 
+/* --------------------------------------------------------------- abundances */
+
+const ratioName = (element) => (element === "Fe" ? "[Fe/H]" : `[${element}/Fe]`);
+/* H and He stay A(X) in either scale: [M/H] does not apply to them. */
+const asRatio = (element) => ui.abundScale === "ratio" && element !== "H" && element !== "He";
+
+/* With its sign, and no "-0.00". */
+function signed(value, digits) {
+  const text = value.toFixed(digits);
+  if (Number(text) === 0) return (0).toFixed(digits);
+  return value > 0 ? `+${text}` : text;
+}
+
+function renderScaleButtons() {
+  for (const button of $$(".abund-scale [data-scale]")) {
+    const on = button.dataset.scale === ui.abundScale;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+}
+
+function chooseElement(element) {
+  ui.element = element;
+  renderAbundances();
+  renderPattern();
+}
+
+/* The cells are made once and then only updated, so that what the pointer rests
+   on stays: the fit dot shows only under the pointer. */
+function buildTable(table, elements) {
+  // The page already holds the controls, in the table's empty upper part.
+  table.append(h("div", { class: "gap", style: "grid-row:8" }), ...elements.map((row) => {
+    const [r, c] = elementPosition(row.z);
+    const element = row.el;
+    // Row 9 holds the lanthanides, which move up into the empty part of row 7.
+    return h("div", { class: r === 9 ? "cell f-first" : "cell", "data-el": element, style: `grid-row:${r};grid-column:${c}` },
+      h("button", { type: "button", class: "el", onclick: () => chooseElement(element) }, h("b", {}), h("small", {})),
+      h("button", {
+        type: "button", class: "el-nlte", "aria-label": `NLTE for ${element}`,
+        onclick: () => {
+          ui.element = element;
+          setNlte(element, !S.nlte.elements.includes(element));
+        },
+      }, h("span", {}, "N")),
+      element === "H" ? null : h("button", {
+        type: "button", class: "el-fit", "aria-label": `Fit the abundance of ${element}`,
+        onclick: () => {
+          ui.element = element;
+          toggleFit(`abund ${element}`, !S.params.fitparameters.includes(`abund ${element}`));
+        },
+      }, h("span", {})));
+  }));
+}
+
+function updateCell(cell, row, fitting) {
+  const element = row.el;
+  const ratio = asRatio(element);
+  const main = cell.querySelector(".el");
+  const value = ratio ? row.ratio : row.A;
+  main.classList.toggle("changed", Math.abs(row.delta || 0) > 0.0005);
+  main.classList.toggle("selected", element === ui.element);
+  const symbol = main.querySelector("b");
+  // The Fe box holds another quantity in this scale, and says so.
+  symbol.textContent = ratio && element === "Fe" ? "Fe/H" : element;     // short, between the switches
+  symbol.classList.toggle("long", symbol.textContent.length > 2);
+  const asA = ui.abundScale === "ratio" && !ratio;         // H, He: marked A, so one digit fewer
+  const text = value === null ? "–" : ratio ? signed(value, 2) : value.toFixed(asA ? 1 : 2);
+  main.querySelector("small").textContent = asA && value !== null ? `A ${text}` : text;
+
+  const nlte = cell.querySelector(".el-nlte");
+  const on = S.nlte.elements.includes(element);
+  nlte.hidden = !on && !gridsFor(element).length;
+  nlte.classList.toggle("on", on);
+  nlte.setAttribute("aria-pressed", String(on));
+  nlte.title = on ? "NLTE on" : "Turn NLTE on";
+  nlte.disabled = jobRunning();
+
+  const fit = cell.querySelector(".el-fit");
+  if (!fit) return;
+  const chosen = fitting.has(`abund ${element}`);
+  fit.classList.toggle("on", chosen);
+  fit.setAttribute("aria-pressed", String(chosen));
+  fit.title = chosen ? "Stop fitting this abundance" : "Fit this abundance";
+  fit.disabled = jobRunning();
+}
+
+/* The size of the grids is warned about with the other warnings, bottom left. */
+function renderNlteSummary() {
+  const box = $("#nlte-summary");
+  const elements = S.nlte.elements;
+  box.hidden = !elements.length;
+  // This has little room; the filled N in the table shows which ones anyway.
+  box.replaceChildren(
+    h("span", { title: elements.join(", ") }, "NLTE: ",
+      h("b", {}, elements.length > 8 ? `${elements.length} elements` : elements.join(", "))),
+    h("button", { type: "button", disabled: jobRunning(), onclick: () => send("nlte/off") }, "Turn all off"));
+}
+
+let abundRender = 0;
+
 async function renderAbundances() {
+  const mine = ++abundRender;
   const data = await request("abund");
+  if (mine !== abundRender) return;        // a newer one is on its way
   const fitting = new Set(S.params.fitparameters);
   const table = $("#ptable");
-  table.replaceChildren(h("div", { class: "gap", style: "grid-row:8" }));
-  for (const row of data.elements) {
-    const [r, c] = elementPosition(row.z);
-    const classes = ["el"];
-    if (Math.abs(row.delta || 0) > 0.0005) classes.push("changed");
-    if (row.el === ui.element) classes.push("selected");
-    if (fitting.has(`abund ${row.el}`)) classes.push("fit");
-    if (S.nlte.elements.includes(row.el)) classes.push("nlte");
-    table.append(h("button", {
-      class: classes.join(" "), style: `grid-row:${r};grid-column:${c}`, title: `${row.el}: A = ${fixed(row.A, 3)}`,
-      onclick: () => { ui.element = row.el; renderAbundances(); },
-    }, h("b", {}, row.el), h("small", {}, row.A === null ? "–" : row.A.toFixed(2))));
-  }
+  if (!table.querySelector(".cell")) buildTable(table, data.elements);
+  for (const row of data.elements) updateCell(table.querySelector(`.cell[data-el="${row.el}"]`), row, fitting);
+  renderScaleButtons();
+  renderNlteSummary();
   const chosen = data.elements.find((e) => e.el === ui.element) || data.elements[25];
   renderElementEditor(chosen, data, fitting);
 }
 
-/* The editor is built once per element and then only updated. Replacing the
-   number box after every step broke its arrows in the Mac app: WebKit's arrows
-   learn from pointer movement which one the pointer is over, so a new box under
-   a resting pointer only selected the number. */
+/* The other way of writing the same abundance, under the box. */
+function otherScale(chosen, data, ratio) {
+  const element = chosen.el;
+  if (element === "H" || element === "He") {
+    return ui.abundScale === "ratio" ? "[M/H] does not apply to H and He, so they are given as A." : "";
+  }
+  if (chosen.solar === null) {
+    return `${data.reference} has no solar value for ${element}.` + (ratio ? " Switch to A(X) to change it." : "");
+  }
+  if (ratio) return chosen.A === null ? "" : `A(${element}) = ${chosen.A.toFixed(3)}`;
+  return chosen.ratio === null ? "" : `${ratioName(element)} = ${signed(chosen.ratio, 3)} (${data.reference})`;
+}
+
+/* The editor is built once per element and scale and then only updated.
+   Replacing the number box after every step broke its arrows in the Mac app:
+   WebKit's arrows learn from pointer movement which one the pointer is over, so
+   a new box under a resting pointer only selected the number. */
 function renderElementEditor(chosen, data, fitting) {
   const editor = $("#element-editor");
   const fixedElement = chosen.el === "H";
-  if (editor.dataset.element !== chosen.el || !editor.querySelector("input[type=number]")) {
-    editor.dataset.element = chosen.el;
-    const input = h("input", { type: "number", step: "0.05", "aria-label": `A(${chosen.el})` });
+  const ratio = asRatio(chosen.el);
+  const label = ratio ? ratioName(chosen.el) : `A(${chosen.el})`;
+  const key = `${chosen.el} ${label}`;
+  if (editor.dataset.element !== key || !editor.querySelector("input[type=number]")) {
+    editor.dataset.element = key;
+    const input = h("input", { type: "number", step: "0.05", "aria-label": label });
     let sent = 0;
     input.addEventListener("change", () => {
       const mine = ++sent;
       // Until the last change is answered the box is ahead of the stored value;
       // writing an older answer into it would undo a step.
       input.dataset.pending = "1";
-      send("abund/set", { element: chosen.el, value: input.value }).then(() => {
+      send("abund/set", { element: chosen.el, value: input.value, scale: ratio ? "ratio" : "A" }).then(() => {
         if (mine !== sent) return;
         delete input.dataset.pending;
         renderAbundances();
@@ -937,20 +1347,23 @@ function renderElementEditor(chosen, data, fitting) {
     });
     const reset = h("button", { onclick: () => send("abund/set", { element: chosen.el, value: null }) }, "Reset");
     const fit = h("input", { type: "checkbox", onchange: (e) => toggleFit(`abund ${chosen.el}`, e.target.checked) });
+    const meaning = !ratio ? "log10(N_X / N_H) + 12 as used in the synthesis, including [M/H]"
+      : chosen.el === "Fe" ? "A(Fe) minus the Sun's" : `A(${chosen.el}) and A(Fe), each minus the Sun's, subtracted`;
     editor.replaceChildren(
       h("h3", {}, `${chosen.el}  (Z = ${chosen.z})`),
-      h("div", { class: "row" },
-        h("label", { title: "log10(N_X / N_H) + 12 as used in the synthesis, including [M/H]" }, `A(${chosen.el})`),
-        input, reset),
+      h("div", { class: "row" }, h("label", { title: meaning }, label), input, reset),
+      h("p", { class: "hint other" }),
       h("p", { class: "hint change" }),
       fixedElement ? "" : h("label", { class: "check fit-box" }, fit, " Fit this abundance"),
       h("div", { class: "nlte-box", style: "margin-top:8px" }));
   }
   const input = editor.querySelector("input[type=number]");
-  const value = chosen.A === null ? "" : String(Number(chosen.A.toFixed(4)));
+  const number = ratio ? chosen.ratio : chosen.A;
+  const value = number === null ? "" : String(Number(number.toFixed(4)));
   if (!input.dataset.pending && (value === "" || Number(input.value) !== Number(value) || input.value === "")) input.value = value;
-  input.disabled = fixedElement || jobRunning();
+  input.disabled = fixedElement || jobRunning() || (ratio && chosen.solar === null);
   editor.querySelector(".row button").disabled = fixedElement || jobRunning() || !chosen.delta;
+  editor.querySelector(".other").textContent = otherScale(chosen, data, ratio);
   editor.querySelector(".change").textContent = `Change relative to ${data.baseline}: ${chosen.delta === null ? "–" : (chosen.delta >= 0 ? "+" : "") + chosen.delta.toFixed(3)} dex (on top of [M/H] = ${fmt(data.monh)}).`;
   const fit = editor.querySelector(".fit-box input");
   if (fit) {
@@ -960,26 +1373,280 @@ function renderElementEditor(chosen, data, fitting) {
   editor.querySelector(".nlte-box").replaceChildren(...[nlteControls(chosen.el)].flat().filter(Boolean));
 }
 
-function renderNlte() {
-  const box = $("#nlte-panel");
-  const elements = S.nlte.elements;
-  const candidates = Object.keys(options.nlte_defaults).filter((e) => !elements.includes(e));
-  const add = h("select", { "aria-label": "Element to treat in NLTE", disabled: jobRunning() },
-    h("option", { value: "" }, "Add element…"), candidates.map((e) => h("option", { value: e }, e)));
-  add.addEventListener("change", () => add.value && send("nlte", { element: add.value, enabled: true }));
-  box.replaceChildren(
-    h("p", { class: "hint" }, "Elements listed here are synthesized with departure coefficients. Grids are downloaded to ~/.sme the first time; some are several GB."),
-    elements.length
-      ? h("table", { style: "max-width:560px" }, h("tbody", {}, elements.map((e) => h("tr", {}, h("td", {}, h("b", {}, e)), h("td", {}, nlteControls(e))))))
-      : h("p", {}, "Everything is computed in LTE."),
-    h("div", { class: "row" }, add));
+/* -------------------------------------------------------- abundance pattern */
+
+const SAME = 0.0005;          // dex; closer to solar proportions than this counts as solar
+const MAX_NAMES = 20;
+
+/* The abundances of the last fit that still hold, with their errors. */
+function fittedElements(rows) {
+  const fitted = new Map();
+  for (const parameter of S.fit?.parameters || []) {
+    if (!parameter.name.startsWith("abund ")) continue;
+    const element = parameter.name.slice(6);
+    const row = rows.find((r) => r.el === element);
+    // Edited since the fit: its errors are no longer those of this value.
+    if (!row || row.A === null || Math.abs(row.A - parameter.value) > 1e-6) continue;
+    let errors = parameter;
+    if (ui.abundScale === "ratio") {
+      errors = parameter.ratio;
+      if (errors && element !== "Fe" && Math.abs(errors.value - row.ratio) > 1e-6) continue;
+      if (element === "Fe") errors = null;      // [Fe/H] is not on this axis
+    }
+    fitted.set(element, { sme: errors?.unc_sme ?? null, ls: errors?.unc_fit ?? null });
+  }
+  return fitted;
 }
 
+function patternFigure(data) {
+  const ratio = ui.abundScale === "ratio";
+  const rows = data.elements.filter((r) => (ratio ? r.z > 2 && r.ratio !== null : r.A !== null && r.A > -50));
+  const fitted = fittedElements(data.elements);
+  const nlte = new Set(S.nlte.elements);
+  // Fe itself is the measure of [X/Fe].
+  const height = (r) => (!ratio ? r.A : r.el === "Fe" ? 0 : r.ratio);
+  const departs = (r) => r.el !== "Fe" && r.ratio !== null && Math.abs(r.ratio) > SAME;
+  // An edited Fe moves everything else off solar proportions, so it is marked too.
+  const marked = rows.filter((r) => departs(r) || fitted.has(r.el) || nlte.has(r.el) ||
+    (r.el === "Fe" && Math.abs(r.delta || 0) > SAME));
+  const named = marked.length <= MAX_NAMES ? null
+    : new Set(marked.filter((r) => fitted.has(r.el) || nlte.has(r.el) || Math.abs(r.delta || 0) > SAME).map((r) => r.el));
+  const name = (r) => (named && !named.has(r.el) ? "" : r.el + (nlte.has(r.el) ? " (N)" : ""));
+  const bar = (r) => fitted.get(r.el)?.sme ?? fitted.get(r.el)?.ls ?? null;
+  const about = (r) => {
+    const lines = [`<b>${r.el}</b>  Z = ${r.z}`];
+    if (r.el === "Fe") lines.push(data.feh === null ? "" : `[Fe/H] = ${signed(data.feh, 3)}`);
+    else if (r.el !== "H" && r.el !== "He" && r.ratio !== null) lines.push(`[${r.el}/Fe] = ${signed(r.ratio, 3)}`);
+    if (r.A !== null) lines.push(`A(${r.el}) = ${r.A.toFixed(3)}`);
+    if (r.solar !== null) lines.push(`Sun: ${r.solar.toFixed(2)}`);
+    const errors = fitted.get(r.el);
+    if (errors) {
+      const parts = [[errors.sme, "SME"], [errors.ls, "ls"]].filter(([v]) => v !== null).map(([v, kind]) => `${fmt(v, 2)} (${kind})`);
+      lines.push(`fitted, σ ${parts.length ? parts.join(", ") : "not given"}`);
+    }
+    if (nlte.has(r.el)) lines.push("NLTE");
+    return lines.filter(Boolean).join("<br>");
+  };
+  const points = (list, extra) => ({
+    type: "scatter", x: list.map((r) => r.z), y: list.map(height),
+    customdata: list.map((r) => [r.el, about(r)]), hovertemplate: "%{customdata[1]}<extra></extra>", ...extra,
+  });
+
+  const traces = [];
+  if (!ratio) {
+    const sun = data.elements.filter((r) => r.z <= 92);
+    traces.push({
+      type: "scatter", mode: "lines", x: sun.map((r) => r.z), y: sun.map((r) => r.solar),
+      connectgaps: false, hoverinfo: "skip", line: { color: css("--compare"), width: 1.2 }, name: "Sun",
+    });
+  }
+  traces.push(points(rows.filter((r) => !marked.includes(r)), { mode: "markers", marker: { color: css("--muted"), size: 5 } }));
+  const withBar = marked.filter((r) => bar(r) !== null);
+  const without = marked.filter((r) => bar(r) === null);
+  for (const list of [without, withBar]) {
+    if (!list.length) continue;
+    traces.push(points(list, {
+      mode: "markers", marker: { color: css("--synth"), size: 8 },
+      error_y: list === withBar ? { type: "data", array: list.map(bar), color: css("--synth"), thickness: 1.4, width: 4 } : undefined,
+    }));
+  }
+  const selected = rows.find((r) => r.el === ui.element);
+  if (selected) {
+    traces.push({
+      type: "scatter", mode: "markers", x: [selected.z], y: [height(selected)], hoverinfo: "skip",
+      marker: { symbol: "circle-open", size: 16, color: css("--accent"), line: { width: 2 } },
+    });
+  }
+
+  // The names are annotations: updating a plot, Plotly can leave texts of points out.
+  const names = marked.filter(name).map((r) => ({
+    x: r.z, y: height(r), text: name(r), showarrow: false, font: { size: 11, color: css("--text") },
+    // beside an error bar, not on it
+    ...(bar(r) === null ? { yanchor: "bottom", yshift: 5 } : { xanchor: "left", xshift: 6 }),
+  }));
+
+  const reach = rows.flatMap((r) => [height(r) - (bar(r) || 0), height(r) + (bar(r) || 0)]);
+  // [X/Fe] that is solar everywhere must not be blown up to the noise level.
+  const range = ratio ? [Math.min(-0.5, ...reach.map((v) => v - 0.15)), Math.max(0.5, ...reach.map((v) => v + 0.2))] : undefined;
+  const axis = {
+    gridcolor: css("--grid"), zeroline: false, linecolor: css("--border"),
+    tickfont: { color: css("--muted"), size: 11 }, title: { font: { color: css("--muted"), size: 12 } },
+  };
+  const layout = {
+    uirevision: `${ui.abundScale}|${data.reference}`,
+    paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"), font: { color: css("--text") },
+    margin: { l: 58, r: 14, t: 30, b: 40 }, separators: ".", showlegend: false, hovermode: "closest",
+    hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--border"), font: { color: css("--text") } },
+    xaxis: { ...axis, title: { ...axis.title, text: "Atomic number" }, range: [ratio ? 1.5 : -0.5, 93.5], dtick: 10 },
+    yaxis: { ...axis, title: { ...axis.title, text: ratio ? "[X/Fe]" : "A(X)" }, range },
+    shapes: ratio ? [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: css("--muted"), width: 1 }, layer: "below" }] : [],
+    annotations: [{
+      xref: "paper", yref: "paper", x: 0, y: 1, xanchor: "left", yanchor: "bottom", showarrow: false,
+      text: `Sun: ${data.reference}${ratio ? "" : " (blue line)"}   [Fe/H] = ${data.feh === null ? "–" : signed(data.feh, 3)}`,
+      font: { size: 12, color: css("--muted") },
+    }, ...names],
+  };
+  return { traces, layout, errors: withBar.length };
+}
+
+let patternRender = 0;
+
+async function renderPattern() {
+  if (ui.view !== "pattern" || !S) return;
+  const mine = ++patternRender;
+  const data = await request("abund");
+  if (mine !== patternRender || ui.view !== "pattern") return;
+  const graph = $("#pattern");
+  const { traces, layout, errors } = patternFigure(data);
+  $("#pattern-note").textContent = "Orange: off solar proportions, fitted or NLTE (N)." +
+    (errors ? " Bars: σ of the last fit (SME)." : "");
+  renderScaleButtons();
+  await Plotly.react(graph, traces, layout, { displayModeBar: false, scrollZoom: true });
+  if (graph._pysmeReady) return;
+  graph._pysmeReady = true;
+  graph.on("plotly_click", (event) => {
+    const element = event.points[0]?.customdata?.[0];
+    if (!element) return;
+    ui.element = element;
+    $("#drawer").classList.remove("collapsed");
+    showDrawer("abund");
+    renderPattern();
+    resizePlot();
+  });
+}
+
+function setView(view) {
+  ui.view = view;
+  const pattern = view === "pattern";
+  if (pattern) setTool("zoom");
+  for (const button of $$("#view-tabs [data-view]")) {
+    button.classList.toggle("active", button.dataset.view === view);
+    button.setAttribute("aria-pressed", String(button.dataset.view === view));
+  }
+  for (const item of $$(".plot-toolbar .for-pattern")) item.hidden = !pattern;
+  $(".plot-toolbar .for-spectrum").hidden = pattern;
+  $("#pattern").hidden = !pattern;       // it covers the spectrum, which stays as it was
+  hideReadout();
+  if (pattern) renderPattern();
+  else resizePlot();
+}
+
+let citeRender = 0;
+
+/* One entry of the bibliography, in the format chosen above the list. */
+function citationNode(entry, format, ...lead) {
+  return format === "bibtex"
+    ? h("pre", { class: "cite-entry" }, entry.bibtex)
+    : h("div", { class: "cite-entry" }, ...lead, h("span", {}, entry.text));
+}
+
+/* The whole list, or, coming from a line of the line list, that line alone. */
 async function renderCitations() {
   const format = $("#cite-format").value;
-  $("#cite-text").textContent = "Building the reference list…";
-  const data = await request("citation?format=" + format);
-  $("#cite-text").textContent = data.text;
+  const list = $("#cite-list");
+  const mine = ++citeRender;
+  if (!list.children.length) list.textContent = "Building the reference list…";
+  if (ui.cited && ui.cited.list !== S.linelist.version) ui.cited = null;
+  const [data, line] = await Promise.all([
+    request("citation?format=" + format),
+    ui.cited ? request(`linelist/detail?id=${ui.cited.id}`).catch(() => null) : null,
+  ]);
+  if (mine !== citeRender) return;
+  if (!line) ui.cited = null;
+  $("#cite-from").hidden = !line;
+  $("#cite-save").hidden = Boolean(line);      // it saves the whole list
+  $("#cite-hint").hidden = Boolean(line);
+  if (line) renderLineSources(list, data, line, format);
+  else {
+    ui.citeText = data.text;
+    let number = 0;
+    list.replaceChildren(...(data.sections.length ? data.sections.map((part) => {
+      const section = h("section", { class: "cite-section" }, h("h3", {}, part.title));
+      if (!part.entries.length) section.append(h("p", { class: "hint" }, part.empty));
+      for (const entry of part.entries) {
+        number += 1;
+        section.append(citationNode(entry, format, h("span", { class: "cite-number" }, `[${number}]`),
+          part.keys ? h("b", { class: "cite-key" }, entry.key) : ""));
+      }
+      return section;
+    }) : [h("pre", {}, data.text)]));
+  }
+  if (ui.scrollToCited) {
+    ui.scrollToCited = false;
+    $(".drawer-body").scrollTop = 0;
+  }
+}
+
+function showSource(key) {
+  const list = $("#cite-list");
+  let chosen = null;
+  for (const node of $$("[data-source]", list)) {
+    const on = node.dataset.source === key;
+    node.classList.toggle("cited", on);
+    if (on) chosen = node;
+  }
+  if (!chosen) return;
+  const body = $(".drawer-body");
+  body.scrollTop += chosen.getBoundingClientRect().top - body.getBoundingClientRect().top -
+    $("#cite-from").offsetHeight - 24;
+}
+
+/* Every quantity of one line beside its source, then those references only.
+   VALD names a source for each quantity, so one line often has several. */
+function renderLineSources(list, data, line, format) {
+  $("#cite-line").textContent = line.line;
+  const listed = ["lines", "vald"].flatMap((id) => data.sections.find((part) => part.id === id)?.entries || []);
+  const entryOf = (key) => listed.find((e) => e.key.toLowerCase() === key.toLowerCase());
+
+  const sourceCell = (q) => h("td", { class: "line-source" },
+    q.sources.map((key) => h("button", { type: "button", class: "link", onclick: () => showSource(key) }, key)),
+    // A source stands behind the file's value, not behind one typed in here.
+    q.file !== null && q.sources.length ? h("span", { class: "hint" }, "for the file's value") : null,
+    q.note ? h("span", { class: "hint" }, q.note) : null,
+    !q.sources.length && !q.note ? h("span", { class: "hint" }, "–") : null);
+  const table = h("table", { class: "line-sources" },
+    h("thead", {}, h("tr", {}, h("th", {}, "Quantity"), h("th", {}, "Value"), h("th", {}, "Source"))),
+    h("tbody", {}, line.quantities.map((q) => h("tr", {},
+      h("td", {}, q.name),
+      h("td", {}, q.value, q.file !== null ? h("div", { class: "edited-note" }, `edited here; the file had ${q.file}`) : null),
+      sourceCell(q)))));
+
+  const section = h("section", { class: "cite-section" }, h("h3", {}, "References of this line"));
+  if (!line.references.length) section.append(h("p", { class: "hint" }, "The line list names no reference for this line."));
+  if (line.references.some((r) => r.uses.every((use) => use === "other data"))) {
+    section.append(h("p", { class: "hint" }, "For some of these the file does not say which quantity they gave."));
+  }
+  for (const reference of line.references) {
+    const entry = entryOf(reference.key);
+    const key = h("b", { class: "cite-key" }, reference.key);      // as in the full list
+    const node = entry ? citationNode(entry, format, key)
+      : h("div", { class: "cite-entry" }, key, h("span", {}, "PySME has no bibliography entry for this one."));
+    node.dataset.source = reference.key;
+    section.append(node);
+  }
+  list.replaceChildren(table, section);
+
+  // What Copy takes is what is shown.
+  const entries = line.references.map((r) => entryOf(r.key)).filter(Boolean);
+  ui.citeText = format === "bibtex"
+    ? [`% ${line.line}`, ...entries.map((e) => e.bibtex)].join("\n\n") + "\n"
+    : [line.line,
+      ...line.quantities.map((q) => `${q.name}: ${q.value}${q.file !== null ? ` (edited; file: ${q.file})` : ""}${q.sources.length ? ` [${q.sources.join(", ")}]` : ""}`),
+      "",
+      ...line.references.map((r) => `${r.key}: ${entryOf(r.key)?.text || "no bibliography entry"}`),
+    ].join("\n") + "\n";
+}
+
+/* From a line of the line list to its data and references. */
+function showSources(id) {
+  ui.lineScroll = $(".line-scroll").scrollTop;        // to come back to the same rows
+  ui.cited = { id, list: S.linelist.version };
+  ui.scrollToCited = true;
+  const drawer = $("#drawer");
+  drawer.classList.remove("collapsed");
+  if (drawer.offsetHeight < 250) drawer.style.height = "250px";
+  showDrawer("cite");
+  resizePlot();
 }
 
 /* ------------------------------------------------------------------ dialogs */
@@ -1147,7 +1814,6 @@ async function showSettings(info) {
     h("p", {}, `PySME-GUI ${info.gui}`, newGui ? h("b", {}, `  → ${latest.gui} available`) : latest && latest.gui ? "  (up to date)" : ""),
     gui,
     channelRow(info, busy, run),
-    h("p", { class: "hint" }, "Updating the interface never changes your PySME version."),
     latest && latest.gui_note ? h("p", { class: "hint" }, latest.gui_note) : "",
     newGui && latest.gui_blocked ? h("p", { style: "color:var(--err)" }, latest.gui_blocked) : "",
     latest && latest.errors.length ? h("p", { class: "hint" }, "Could not check: " + latest.errors.join("; ")) : "",
@@ -1158,12 +1824,6 @@ async function showSettings(info) {
   if (info.managed) {
     body.append(h("ul", { class: "versions" }, info.environments.map((env) => versionRow(env, info, busy, run))));
     body.append(installRow(info, busy, run));
-    const selected = info.environments.find((e) => e.selected);
-    if (selected) {
-      body.append(h("p", { class: "hint" }, "Python for your own scripts, with exactly the selected PySME installation: ",
-        h("span", { class: "selectable" }, selected.python), " ",
-        h("button", { class: "link", onclick: () => copyText(selected.python) }, "Copy")));
-    }
   } else {
     body.append(h("p", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
       h("p", { class: "hint" }, info.custom_python
@@ -1172,7 +1832,7 @@ async function showSettings(info) {
   }
 
   body.append(
-    ownPySME(info),
+    advancedSettings(info),
     h("h3", {}, "Details"),
     h("div", { class: "kv" },
       h("span", {}, "Running"), h("span", {}, `PySME ${info.pysme}, SMElib ${shortSmelib(info.smelib)}`),
@@ -1198,7 +1858,7 @@ async function showSettings(info) {
 /* Which releases of the interface are offered. Alpha builds are for internal
    testing: the choice appears only for someone who already receives them. */
 function channelRow(info, busy, run) {
-  const names = { stable: "released versions only", beta: "beta versions too", alpha: "everything, including alpha (internal testing)" };
+  const names = { stable: "release only", beta: "release + beta", alpha: "release + beta + alpha (internal testing)" };
   const offered = info.channel === "alpha" ? ["stable", "beta", "alpha"] : ["stable", "beta"];
   const select = h("select", { "aria-label": "Interface updates to receive", disabled: busy, onchange: () => run("update/channel", { channel: select.value }) },
     offered.map((name) => h("option", { value: name }, names[name])));
@@ -1206,8 +1866,24 @@ function channelRow(info, busy, run) {
   return h("label", { class: "row" }, "Receive ", select);
 }
 
-/* For the few who bring their own PySME: folded away, and open when in use. */
-function ownPySME(info) {
+/* A text to be pasted into a terminal, with a button that copies it. */
+const copyable = (text) => h("div", { class: "command" },
+  h("code", { class: "selectable" }, text),
+  h("button", { class: "link", onclick: () => copyText(text) }, "Copy"));
+
+/* The other direction: the app's own PySME, used outside the app. */
+function appPython(info) {
+  const selected = info.managed && info.environments.find((e) => e.selected);
+  if (!selected) return "";
+  return h("div", {},
+    h("h3", {}, "Use the app's PySME in your own scripts"),
+    h("p", {}, "Run a script with this Python to get the same PySME and SMElib as the interface."),
+    copyable(selected.python),
+    h("p", { class: "hint" }, "Put the path in quotes in a terminal: it contains spaces. It changes when you switch the PySME version. This Python belongs to the app, so do not install or update packages in it."));
+}
+
+/* For the few who need either: folded away, and open when an own PySME is in use. */
+function advancedSettings(info) {
   const command = 'python -c "import sys; print(sys.executable)"';
   const python = h("input", { type: "text", value: ui.ownDraft ?? info.custom_python ?? "", placeholder: "empty: the app's own PySME", "aria-label": "Path of your Python", style: "flex:1" });
   python.spellcheck = false;
@@ -1242,10 +1918,11 @@ function ownPySME(info) {
 
   const section = h("details", { class: "advanced", ontoggle: () => { ui.advancedOpen = section.open; } },
     h("summary", {}, "Advanced"),
+    appPython(info),
     h("h3", {}, "Use a PySME you installed yourself"),
     h("p", {}, h("b", {}, "Usually leave this empty."), " The app has its own PySME, managed above. Fill this in only to run the interface with an installation of yours, for example a development build or one you compiled."),
     h("p", { class: "hint" }, "To find the path: in a terminal, activate the environment in which you use PySME, then run"),
-    h("div", { class: "command" }, h("code", { class: "selectable" }, command), h("button", { class: "link", onclick: () => copyText(command) }, "Copy")),
+    copyable(command),
     h("p", { class: "hint" }, "Paste the whole line it prints: the Python program itself, not the environment folder. That environment needs PySME only; the interface comes with the app."),
     h("div", { class: "row" }, python, button),
     info.custom_python
@@ -1317,12 +1994,25 @@ function installRow(info, busy, run) {
       h("button", { disabled: busy || !choices.length, onclick: () => run("pysme/install", { version: select.value }) }, "Install"),
       h("label", { class: "check" }, early, " pre-releases")),
     newer ? h("p", {}, h("b", {}, `PySME ${newer} is new.`), " Installing it keeps the versions you have.") : "",
-    h("p", { class: "hint" }, `This interface works with PySME ${info.supported}. Installing does not switch to the new version.`));
+    h("p", { class: "hint" }, `This interface works with PySME ${info.minimum} or newer. Installing does not switch to the new version.`));
 }
 
 async function restartApp() {
   if (S.dirty && !(await confirmDialog("Restart with unsaved changes?", "Changes that were not saved will be lost.", "Restart"))) return;
   toNative({ type: "restart" });
+}
+
+/* What the label beside the name means. */
+function showStage() {
+  const { stage, version } = S.release;
+  const what = stage === "alpha"
+    ? `an alpha version, for internal testing: things may change or not work.`
+    : `a beta version, still being tested.`;
+  const dialog = openDialog(`${stage[0].toUpperCase()}${stage.slice(1)} version`,
+    [h("p", {}, `This interface (${version}) is ${what}`),
+      h("p", {}, "Check results against your own PySME scripts before you rely on them, and report what goes wrong.")],
+    [h("button", { type: "button", onclick: () => showReport() }, "Report a problem…"),
+      h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, "Close")]);
 }
 
 /* ---------------------------------------------------------- problem reports */
@@ -1435,7 +2125,7 @@ async function mayDiscard() {
 
 /* Finish the field being edited so its value is sent before the next action. */
 function commitEdits() {
-  if (document.activeElement && document.activeElement.matches("input, select")) document.activeElement.blur();
+  if (document.activeElement && document.activeElement.matches("input, select, textarea")) document.activeElement.blur();
 }
 
 const commands = {
@@ -1473,8 +2163,9 @@ const commands = {
     if (path && (await send("export/csv", { path }))) toast("CSV written.");
   },
   async exportPng() {
-    const graph = $("#plot");
-    if (!spectrum.segments.length) return toast("There is no plot yet.", "error");
+    const pattern = ui.view === "pattern";
+    const graph = $(pattern ? "#pattern" : "#plot");
+    if (!pattern && !spectrum.segments.length) return toast("There is no plot yet.", "error");
     // Figures for papers and slides are exported in light colours.
     const theme = currentTheme();
     const recolour = darkNow();
@@ -1482,18 +2173,28 @@ const commands = {
     try {
       if (recolour) {
         setThemeAttribute("light");
-        await renderPlot();
-        await updateLineLabels();
+        if (pattern) await renderPattern();
+        else {
+          await renderPlot();
+          await updateLineLabels();
+        }
       }
-      url = await Plotly.toImage(graph, { format: "png", width: graph.clientWidth, height: graph.clientHeight, scale: 2 });
+      // On screen the legend is the line above the plot; a figure needs its own.
+      const figure = {
+        data: graph.data,
+        layout: pattern ? graph.layout : { ...graph.layout, showlegend: true, margin: { ...graph.layout.margin, t: 30 } },
+      };
+      url = await Plotly.toImage(figure, { format: "png", width: graph.clientWidth, height: graph.clientHeight, scale: 2 });
     } finally {
       if (recolour) {
         setThemeAttribute(theme);
         renderPlot();
+        renderPattern();
       }
     }
-    if (NATIVE) toNative({ type: "savePng", data: url.split(",")[1], name: "spectrum.png" });
-    else h("a", { href: url, download: "spectrum.png" }).click();
+    const file = pattern ? "abundances.png" : "spectrum.png";
+    if (NATIVE) toNative({ type: "savePng", data: url.split(",")[1], name: file });
+    else h("a", { href: url, download: file }).click();
   },
   async example() { if (await mayDiscard()) { resetView(); send("example"); } },
   synth() { commitEdits(); send("run", { kind: "synth" }); },
@@ -1510,6 +2211,7 @@ function resetView() {
   ui.compare = null;
   compareData = null;
   ui.linePage = 0;
+  ui.gridChoice = {};
   const graph = $("#plot");
   if (graph._pysmeReady) {
     Plotly.purge(graph);
@@ -1549,7 +2251,10 @@ function applyTheme(theme, remember = true) {
   // The window frame, file panels and alerts of the Mac app follow along.
   if (NATIVE) toNative({ type: "theme", value: theme });
   if (remember) request("settings/theme", { theme }).catch((error) => toast(error.message, "error"));
-  if (S) renderPlot();
+  if (S) {
+    renderPlot();
+    renderPattern();
+  }
 }
 
 const darkNow = () => currentTheme() === "dark" || (currentTheme() === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
@@ -1561,7 +2266,7 @@ function wire() {
       commitEdits();
       commands[button.dataset.cmd]();
     }
-    for (const [button, items] of [["#btn-more", "#menu-more"], ["#btn-theme", "#menu-theme"]]) {
+    for (const [button, items] of [["#btn-more", "#menu-more"], ["#btn-theme", "#menu-theme"], ["#btn-remove-what", "#menu-remove"]]) {
       const menu = $(items);
       menu.hidden = event.target.closest(button) ? !menu.hidden : true;
     }
@@ -1580,7 +2285,22 @@ function wire() {
       sendFrom(input, "params", { values: { [name]: value } }, () => writeParam(input));
     });
     if (input.type === "number") input.addEventListener("keydown", (e) => e.key === "Enter" && input.blur());
+    if (input.tagName === "TEXTAREA") {
+      input.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();            // Enter finishes the entry; it adds no line
+        input.blur();
+      });
+    }
   }
+  for (const button of $$("[data-help]")) {
+    button.addEventListener("click", () => {
+      const box = $("#" + button.dataset.help);
+      box.hidden = !box.hidden;
+      button.setAttribute("aria-expanded", String(!box.hidden));
+    });
+  }
+  $("#mu-default").addEventListener("click", () => send("params", { values: { nmu: S.params.nmu } }));
   // Scrolling the sidebar must never change a number by accident.
   document.addEventListener("wheel", () => {
     if (document.activeElement && document.activeElement.type === "number") document.activeElement.blur();
@@ -1600,8 +2320,19 @@ function wire() {
       if (S) renderReadiness();
     });
   }
+  $("#stage-badge").addEventListener("click", showStage);
+  $("#cite-all").addEventListener("click", () => {
+    ui.cited = null;
+    ui.scrollToCited = true;
+    renderCitations();
+  });
+  $("#cite-back").addEventListener("click", () => {
+    ui.cited = null;
+    showDrawer("lines");
+  });
   for (const button of $$("#drawer-tabs [data-tab]")) {
     button.addEventListener("click", () => {
+      if (button.dataset.tab === "cite") ui.cited = null;     // opened by hand
       $("#drawer").classList.remove("collapsed");
       showDrawer(button.dataset.tab);
       resizePlot();
@@ -1636,7 +2367,41 @@ function wire() {
     splitter.addEventListener("pointerup", () => splitter.removeEventListener("pointermove", move), { once: true });
   });
 
-  for (const button of $$("#tools button")) button.addEventListener("click", () => setTool(button.dataset.tool));
+  for (const button of $$("#view-tabs [data-view]")) {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  }
+  for (const button of $$(".abund-scale [data-scale]")) {
+    button.addEventListener("click", () => {
+      ui.abundScale = button.dataset.scale;
+      renderScaleButtons();
+      if (!S) return;
+      if (ui.drawer === "abund") renderAbundances();
+      renderPattern();
+    });
+  }
+  renderScaleButtons();
+  $("#solar-reference").addEventListener("change", (event) => send("abund/reference", { name: event.target.value }));
+
+  // With no mask tool on, dragging zooms. A second click switches a tool off.
+  for (const button of $$("#tools [data-tool]")) {
+    button.addEventListener("click", () => setTool(ui.tool === button.dataset.tool ? "zoom" : button.dataset.tool));
+  }
+  for (const item of $$("#menu-remove [data-remove]")) {
+    item.addEventListener("click", () => {
+      ui.removeWhat = Number(item.dataset.remove);
+      renderMaskTools();
+      setTool("0");                  // choosing what to remove starts removing
+    });
+  }
+  for (const button of $$("#vrad-mode [data-vrad]")) {
+    button.addEventListener("click", () => {
+      ui.velocityMode = button.dataset.vrad;
+      send("params", { values: { vrad_flag: ui.velocityMode } });
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && ui.tool !== "zoom" && !$("#dialog").open) setTool("zoom");
+  });
   $("#show-resid").addEventListener("change", renderPlot);
   $("#show-lines").addEventListener("change", updateLineLabels);
   $("#segment").addEventListener("change", (event) => {
@@ -1667,11 +2432,36 @@ function wire() {
   });
   $("#line-prev").addEventListener("click", () => { ui.linePage -= 1; renderLines(); });
   $("#line-next").addEventListener("click", () => { ui.linePage += 1; renderLines(); });
+  for (const input of $$("[data-line]")) {
+    input.addEventListener("input", () => { input.dataset.editing = "1"; });
+    input.addEventListener("change", () => {
+      delete input.dataset.editing;
+      if (!ui.line) return;
+      if (input.value === "") {
+        writeLineInput(input);
+        return;
+      }
+      sendFrom(input, "linelist/edit", { id: ui.line.id, column: input.dataset.line, value: input.value },
+        () => ui.line && writeLineInput(input));
+    });
+    input.addEventListener("keydown", (e) => e.key === "Enter" && input.blur());
+  }
+  $("#line-reset").addEventListener("click", async () => {
+    await send("linelist/reset", { id: ui.line.id });
+    renderLineEditor(true);
+  });
+  $("#line-reset-all").addEventListener("click", async () => {
+    if (await confirmDialog("Restore all edited lines?", "Every line gets the values it was loaded with.", "Restore")) {
+      await send("linelist/reset", {});
+      renderLineEditor(true);
+    }
+  });
+  $("#line-close").addEventListener("click", () => chooseLine(null));
 
   $("#cite-format").addEventListener("change", renderCitations);
   $("#cite-copy").addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText($("#cite-text").textContent);
+      await navigator.clipboard.writeText(ui.citeText || "");
       toast("Copied.");
     } catch (error) {
       toast("Copying is not allowed here. Select the text and copy it.", "error");
@@ -1686,7 +2476,11 @@ function wire() {
   for (const choice of $$("[data-theme-choice]")) {
     choice.addEventListener("click", () => applyTheme(choice.dataset.themeChoice));
   }
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => S && renderPlot());
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!S) return;
+    renderPlot();
+    renderPattern();
+  });
 
   if (!NATIVE) {
     document.addEventListener("keydown", (event) => {
@@ -1717,6 +2511,10 @@ function resizePlot() {
     const fits = () => !graph._pysmeReady || !graph.clientWidth ||
       (graph._fullLayout.width === graph.clientWidth && graph._fullLayout.height === graph.clientHeight);
     let asked = null;
+    const pattern = $("#pattern");
+    if (!pattern.hidden && pattern._pysmeReady && (pattern._fullLayout.width !== pattern.clientWidth || pattern._fullLayout.height !== pattern.clientHeight)) {
+      Plotly.relayout(pattern, { width: pattern.clientWidth, height: pattern.clientHeight });
+    }
     try {
       if (!fits()) {
         asked = `${graph.clientWidth}x${graph.clientHeight}`;
@@ -1756,32 +2554,45 @@ function valuesAt(graph, wave) {
   return rows;
 }
 
+/* One line above the plot is both its legend and, under the pointer, the values.
+   Its places do not move as the values come and go. A click on a name hides or
+   shows that curve. */
+function renderLegend() {
+  $("#readout").replaceChildren(
+    h("div", { class: "wave" }, h("span", { class: "name" }, "λ"), h("span", { class: "value" })),
+    ...plotCurves.map((curve) => {
+      const dash = h("i", {});
+      dash.style.background = curve.dashed
+        ? `repeating-linear-gradient(90deg, ${curve.colour} 0 3px, transparent 3px 6px)` : curve.colour;
+      const off = ui.hiddenCurves.has(curve.meta);
+      return h("button", {
+        type: "button", "data-curve": curve.meta, class: off ? "off" : null, "aria-pressed": String(!off),
+        title: `${curve.title ? curve.title + ". " : ""}Click to ${off ? "show" : "hide"} this curve`,
+        onclick: () => {
+          if (off) ui.hiddenCurves.delete(curve.meta);
+          else ui.hiddenCurves.add(curve.meta);
+          renderPlot();
+        },
+      }, dash, h("span", { class: "name" }, curve.name), h("span", { class: "value" }));
+    }));
+}
+
 function hideReadout() {
   $("#crosshair").hidden = true;
-  $("#readout").hidden = true;
+  for (const value of $$("#readout .value")) value.textContent = "";
 }
 
 /* Unnormalised fluxes are in the millions. */
 const readoutValue = (value) => (Math.abs(value) >= 1e4 ? value.toExponential(4) : value.toFixed(4));
 
 function showReadout(rows) {
-  const box = $("#readout");
-  // Reuse the items: rebuilding them on every move would cost time for nothing.
-  while (box.children.length < rows.length + 1) {
-    box.append(h("div", {}, h("i", {}), h("span", { class: "name" }), h("span", {})));
+  const wave = $("#readout .wave .value");
+  if (!wave) return;
+  wave.textContent = rows.length ? `${rows[0].wave.toFixed(4)} Å` : "";
+  for (const item of $$("#readout [data-curve]")) {
+    const row = rows.find((r) => r.name === item.dataset.curve);
+    item.lastChild.textContent = row ? readoutValue(row.value) : "";
   }
-  const [title, ...items] = box.children;
-  title.children[0].hidden = true;
-  title.children[1].textContent = "λ";
-  title.children[2].textContent = `${rows[0].wave.toFixed(4)} Å`;
-  items.forEach((item, k) => {
-    item.hidden = k >= rows.length;
-    if (item.hidden) return;
-    item.children[0].style.background = rows[k].colour;
-    item.children[1].textContent = rows[k].name;
-    item.children[2].textContent = readoutValue(rows[k].value);
-  });
-  box.hidden = false;
 }
 
 function wireCrosshair() {
@@ -1790,7 +2601,7 @@ function wireCrosshair() {
   area.addEventListener("pointermove", (event) => {
     const graph = $("#plot");
     const size = graph._fullLayout && graph._fullLayout._size;
-    if (!size || graph.style.visibility === "hidden" || event.buttons) return hideReadout();
+    if (ui.view !== "spectrum" || !size || graph.style.visibility === "hidden" || event.buttons) return hideReadout();
     const frame = graph.getBoundingClientRect();
     const x = event.clientX - frame.left;
     const y = event.clientY - frame.top;
@@ -1802,8 +2613,7 @@ function wireCrosshair() {
 
     const [first, last] = graph._fullLayout.xaxis.range.map(Number);
     const rows = valuesAt(graph, first + ((x - size.l) / size.w) * (last - first));
-    if (rows.length) showReadout(rows);
-    else $("#readout").hidden = true;
+    showReadout(rows);
   });
   area.addEventListener("pointerleave", hideReadout);
   area.addEventListener("pointerdown", hideReadout);   // zoom and selection draw their own box
@@ -1824,11 +2634,14 @@ async function start() {
   for (const error of options.errors || []) toast(error, "error");
   $("#atmo-source").replaceChildren(...options.atmospheres.map((a) => h("option", { value: a }, a)));
   $("#abund-pattern").replaceChildren(...options.patterns.map((p) => h("option", { value: p }, p)));
+  $("#solar-reference").replaceChildren(...options.patterns.map((p) => h("option", { value: p }, p)));
+  $("#solar-reference").value = S.solar_reference;
   if (options.patterns.includes("asplund2021")) $("#abund-pattern").value = "asplund2021";
   const { elements } = await request("abund");
   $("#fit-element").replaceChildren(...elements.filter((e) => e.z > 2).map((e) => h("option", { value: e.el }, e.el)));
   $("#fit-element").value = "Mg";
   renderForms(true);
+  renderDrawer();        // the periodic table needs the list of NLTE grids
   const { notice } = await request("settings");
   if (notice) toast(notice, "error");
   // Quietly look for a newer version; only sets the dot on the settings button.

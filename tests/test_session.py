@@ -235,6 +235,14 @@ def test_abundance_fit_is_reported_on_the_synthesis_scale(app, tmp_path, free_mo
     assert row["solver"]["value"] == pytest.approx(row["value"] - session.sme.monh, abs=1e-6)
     assert (row["unc_fit"] is None) == free_monh
 
+    # As [Ca/Fe] it keeps the solver's errors, whether or not [M/H] was free.
+    shown = next(r for r in session.state()["fit"]["parameters"] if r["name"] == "abund Ca")
+    in_table = next(r for r in session.abundance_table()["elements"] if r["el"] == "Ca")
+    assert shown["ratio"]["label"] == "[Ca/Fe]"
+    assert shown["ratio"]["value"] == pytest.approx(in_table["ratio"])
+    assert shown["ratio"]["unc_fit"] == row["solver"]["unc_fit"] is not None
+    assert "ratio" not in row          # worked out when shown, not stored
+
     # The summary survives saving, and a second fit still works.
     other = Session()
     other.open_path(session.save(str(tmp_path / "abund.sme")))

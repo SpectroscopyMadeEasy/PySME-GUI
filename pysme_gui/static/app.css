@@ -14,6 +14,7 @@
   --grid: #e8e7e2;
   --m-line: #2a78d6;
   --m-cont: #1baf7a;
+  --m-vrad: #eda100;
   --warn-bg: #fff4d6;
   --warn-text: #6b4a00;
   --err: #c22f2e;
@@ -108,6 +109,16 @@ input[type="number"], input[type="text"], input[type="search"], select {
   height: 27px;
 }
 input.invalid { border-color: var(--err); }
+/* a "?" beside a label, and the explanation it unfolds under that row */
+button.help { width: 17px; height: 17px; padding: 0; margin-left: 3px; border-radius: 50%; font-size: 11px; line-height: 1; color: var(--muted); vertical-align: 1px; }
+button.help[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.help-box { grid-column: 1 / -1; padding: 7px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface-2); font-size: 12px; line-height: 1.45; }
+.help-box[hidden] { display: none; }
+.help-box p { margin: 5px 0 0; }
+.mu-values { grid-column: 1 / -1; margin: 0; }
+.mu-values > summary { cursor: pointer; margin: 0; font-weight: 400; font-size: 12px; color: var(--muted); }
+.mu-values textarea { width: 100%; margin-top: 5px; resize: vertical; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-variant-numeric: tabular-nums; }
+.mu-values button { padding-top: 3px; padding-bottom: 3px; }
 input[type="checkbox"] { accent-color: var(--accent); }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 fieldset:disabled { opacity: 0.6; }
@@ -126,7 +137,9 @@ fieldset:disabled { opacity: 0.6; }
    white on dark. */
 /* The picture includes the tail of the "y", so centring it would lift the
    letters above the button labels; 2.5px down centres the capitals instead. */
+.brand { display: flex; align-items: center; gap: 7px; }
 .brand img { display: block; height: 21px; position: relative; top: 2.5px; }
+button.stage-badge { height: 17px; padding: 0 7px; border: 1px solid var(--synth); border-radius: 9px; background: transparent; color: var(--synth); font-size: 10.5px; font-weight: 600; line-height: 15px; }
 .brand .on-dark { display: none; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .brand .on-dark { display: block; }
@@ -209,29 +222,39 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom:
 .segmented button { border-radius: 0; margin-left: -1px; display: flex; align-items: center; gap: 5px; }
 .segmented button:first-child { border-radius: 6px 0 0 6px; }
 .segmented button:last-child { border-radius: 0 6px 6px 0; }
+.segmented[hidden], .segmented button[hidden] { display: none; }
+#btn-remove-what { padding-left: 7px; padding-right: 7px; }
+#vrad-mode { margin: 6px 0; }
+#vrad-mode button { flex: 1; justify-content: center; padding-left: 4px; padding-right: 4px; font-size: 12px; }
 .segmented button.active { background: var(--text); color: var(--surface); border-color: var(--text); }
 .segmented button.active:hover:not(:disabled) { background: var(--text); }
 .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .swatch.line { background: var(--m-line); }
 .swatch.cont { background: var(--m-cont); }
-.swatch.bad { border: 1.5px solid currentColor; opacity: 0.6; }   /* excluded: an empty box, no strip */
+.swatch.vrad { background: var(--m-vrad); }
 .check, .inline { display: flex; align-items: center; gap: 5px; color: var(--muted); }
 .inline select { max-width: 270px; color: var(--text); }
 .banner { margin: 0 12px 6px; padding: 5px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); flex: none; }
 #crosshair { position: absolute; top: 0; left: 0; width: 1px; margin-left: -0.5px; background: var(--muted); pointer-events: none; will-change: transform; z-index: 2; }
-/* The values under the pointer: one line in a fixed place above the plot. */
-#readout { position: absolute; top: 0; left: 0; right: 0; height: 24px; padding: 4px 14px 0 58px; display: flex; gap: 18px; align-items: center; overflow: hidden; white-space: nowrap; pointer-events: none; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-#readout > div { display: flex; align-items: center; flex: none; }
+/* The line above the plot: its legend and, under the pointer, the values. */
+#readout { position: absolute; top: 0; left: 0; right: 0; z-index: 1; height: 24px; padding: 4px 14px 0 58px; display: flex; gap: 16px; align-items: center; overflow: hidden; white-space: nowrap; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+#readout[hidden] { display: none; }
+#readout > * { display: flex; align-items: center; flex: none; }
+#readout > button { padding: 0; border: 0; border-radius: 3px; background: transparent; }
+#readout > button:hover:not(:disabled) { background: var(--surface-2); }
+#readout > button.off { opacity: 0.42; }
+#readout > button.off .name { text-decoration: line-through; }
 #readout i { display: inline-block; width: 18px; height: 2px; margin-right: 6px; }
-#readout span:last-child { min-width: 7ch; }
-#readout span.name { min-width: 0; margin-right: 6px; color: var(--muted); }
+#readout .name { margin-right: 6px; color: var(--muted); }
+#readout .value { min-width: 6.5ch; text-align: left; }
+#readout .wave .value { min-width: 10.5ch; }
 .plot-area { flex: 1; position: relative; min-height: 180px; margin: 0 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; container-type: inline-size; }
 /* a narrow plot: the same line, packed closer */
 @container (max-width: 720px) {
-  #readout { gap: 8px; padding: 4px 8px 0; font-size: 12px; }
+  #readout { gap: 7px; padding: 4px 8px 0; font-size: 12px; }
   #readout i { width: 10px; margin-right: 4px; }
-  #readout span:last-child { min-width: 6ch; }
-  #readout span.name { min-width: 0; margin-right: 3px; }
+  #readout .name { margin-right: 3px; }
+  #readout .value { min-width: 5.6ch; }
 }
 #plot { position: absolute; top: 22px; right: 0; bottom: 0; left: 0; }
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; overflow: auto; justify-content: safe center; }
@@ -243,20 +266,46 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom:
 
 .splitter { height: 8px; cursor: row-resize; flex: none; position: relative; }
 .splitter::after { content: ""; position: absolute; left: 50%; top: 3px; width: 44px; height: 3px; margin-left: -22px; border-radius: 2px; background: var(--border); }
-.drawer { height: 250px; flex: none; display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--border); min-height: 36px; }
+/* At first as tall as the periodic table needs, if the window leaves the plot room. */
+.drawer { height: min(335px, calc(100% - 300px)); flex: none; display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--border); min-height: 36px; }
 .drawer.collapsed { height: 36px !important; }
 .drawer.collapsed .drawer-body { display: none; }
 .drawer-body { flex: 1; overflow: auto; padding: 8px 14px; min-height: 0; }
 
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 3px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-th { color: var(--muted); font-weight: 600; font-size: 11px; position: sticky; top: -8px; background: var(--surface); }
+/* The strip above a stuck header: zoomed, WebKit lets rows show through there. */
+th { color: var(--muted); font-weight: 600; font-size: 11px; position: sticky; top: -8px; background: var(--surface); box-shadow: 0 -5px 0 var(--surface); }
 th:first-child, td:first-child { text-align: left; }
 #line-table tbody tr { cursor: pointer; }
 #line-table tbody tr:hover { background: var(--surface-2); }
-/* the line whose label was clicked in the plot */
+/* the chosen line, marked in the plot too */
 #line-table tbody tr.chosen { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 #line-table tbody tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+#line-table td.edited, .line-editor label.edited, .edited-note { color: var(--accent); font-weight: 700; }
+.edited-note { font-size: 12px; font-weight: 600; margin-top: 4px; }
+/* The Line list tab: search and editor stay put, only the table scrolls. */
+.drawer-body [data-panel="lines"]:not([hidden]) { display: flex; flex-direction: column; height: 100%; }
+.line-scroll { flex: 1; overflow: auto; min-height: 70px; }
+#line-table th { top: 0; }
+.line-editor { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 6px; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface-2); font-variant-numeric: tabular-nums; }
+.line-editor[hidden] { display: none; }
+.line-editor label { display: flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
+.line-editor label[hidden] { display: none; }
+.line-editor input { width: 82px; }
+.line-editor input.long { width: 104px; }
+.line-editor input[data-line="excit"] { width: 128px; }      /* VALD gives ten digits */
+.line-editor .actions { display: flex; gap: 6px; margin-left: auto; }
+.line-editor .actions button { padding-top: 3px; padding-bottom: 3px; }
+.line-editor .hint { flex: 1 1 0; min-width: 150px; margin: 0; line-height: 1.3; }
+.line-editor .hint:empty { display: none; }
+@media (max-width: 1100px) {
+  .line-editor { gap: 4px 9px; padding: 5px 8px; }
+  .line-editor label { gap: 3px; }
+  .line-editor input { width: 66px; }
+  .line-editor input.long { width: 90px; }
+  .line-editor input[data-line="excit"] { width: 116px; }
+}
 .results-layout { display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap; }
 .results-main { flex: 2 1 460px; min-width: 0; }
 .results-runs { flex: 1 1 230px; }
@@ -267,18 +316,75 @@ th:first-child, td:first-child { text-align: left; }
 pre { font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; user-select: text; }
 
 .abund-layout { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
-.ptable { display: grid; grid-template-columns: repeat(18, minmax(30px, 42px)); gap: 2px; }
-.el { height: 35px; padding: 0; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; position: relative; }
-.el b { font-size: 12px; }
-.el small { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The editor stays beside the table down to the narrowest cells. */
+.abund-table { flex: 1 1 682px; max-width: 898px; min-width: 0; }
+.ptable { display: grid; grid-template-columns: repeat(18, minmax(36px, 48px)); gap: 2px; }
+.table-controls { grid-row: 1; grid-column: 3 / 18; display: flex; align-items: center; gap: 14px; min-width: 0; margin-left: 6px; }
+.table-controls button, .table-controls select { height: 26px; padding-top: 0; padding-bottom: 0; font-size: 12px; }
+.table-notes { grid-row: 2 / 4; grid-column: 3 / 13; display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; margin: 0 6px; }
+.abund-legend { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 0 5px; font-size: 11.5px; line-height: 1.35; }
+.key-nlte { display: inline-block; width: 12px; height: 12px; font-size: 8px; font-weight: 700; line-height: 10px; text-align: center; border: 1px solid var(--muted); border-radius: 3px; }
+.key-fit { display: inline-block; width: 8px; height: 8px; margin-left: 10px; border-radius: 50%; background: var(--accent); }
+.nlte-summary { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.nlte-summary span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nlte-summary button { flex: none; height: 22px; padding: 0 8px; font-size: 12px; }
+/* One element: its button, with the NLTE and fit switches beside the symbol. */
+.cell { position: relative; display: flex; }
+.el { flex: 1; min-width: 0; height: 31px; padding: 0; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.el b { font-size: 12px; line-height: 14px; }
+.el b.long { font-size: 9px; letter-spacing: -0.3px; }
+@media (max-width: 1360px) { .el b.long { font-size: 8px; } }       /* narrow cells */
+.el small { font-size: 9.5px; line-height: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .el.changed { border-color: var(--synth); box-shadow: inset 0 0 0 1px var(--synth); }
-.el.selected { background: var(--surface-2); outline: 2px solid var(--accent); }
-.el.fit::after { content: ""; position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.el.nlte::before { content: "N"; position: absolute; top: 0; left: 2px; font-size: 8px; font-weight: 800; color: var(--synth); }
-.ptable .gap { height: 6px; grid-column: 1 / -1; }
+.el.selected { background: var(--surface-2); outline: 2px solid var(--accent); outline-offset: -1px; }
+.el-nlte, .el-fit { position: absolute; top: 0; width: 12px; height: 16px; padding: 0; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; z-index: 1; }
+.el-nlte:hover:not(:disabled), .el-fit:hover:not(:disabled) { background: transparent; }
+/* A little in from the edge where the cell is wide enough. */
+.el-nlte, .el-fit { top: 2px; }
+.el-nlte { left: clamp(0px, calc((100% - 40px) / 2), 3px); }
+.el-fit { right: clamp(0px, calc((100% - 40px) / 2), 3px); }
+.el-nlte span { width: 10px; height: 11px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 3px; font-size: 8px; font-weight: 700; line-height: 9px; text-align: center; color: var(--muted); }
+.el-nlte:hover:not(:disabled) span { border-color: var(--synth); color: var(--synth); }
+.el-nlte.on span, .el-nlte.on:hover:not(:disabled) span { background: var(--synth); border-color: var(--synth); color: #fff; }
+.el-fit span { width: 7px; height: 7px; box-sizing: border-box; border: 1.5px solid var(--accent); border-radius: 50%; opacity: 0; }
+.cell:hover .el-fit span, .el-fit:focus-visible span { opacity: 0.75; }
+.el-fit:hover:not(:disabled) span { opacity: 1; }
+.el-fit.on span { opacity: 1; background: var(--accent); }
+.ptable .gap { height: 0; grid-column: 1 / -1; }
+/* Up by half a row: only Fr and Ra, far to the left, are beside the space this
+   takes. The actinides follow. */
+.cell.f-first { margin-top: -17px; }
+td.ratio { white-space: nowrap; }
+td.ratio .hint { margin: 0; font-size: 11px; }
+.for-spectrum { display: contents; }
+.plot-toolbar .for-pattern.hint { margin: 0; flex: 1 1 200px; }
+#pattern { position: absolute; inset: 0; z-index: 3; background: var(--surface); }
 .element-editor { min-width: 220px; max-width: 300px; flex: 1; }
 .element-editor input[type="number"] { width: 100px; }
 .element-editor select { width: 100%; }
+
+/* references: one block per source, each entry markable */
+.cite-section h3 { margin: 12px 0 4px; }
+.cite-section:first-child h3 { margin-top: 4px; }
+.cite-entry { display: flex; gap: 8px; margin: 0; padding: 2px 8px; border-left: 3px solid transparent; border-radius: 4px; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: text; }
+pre.cite-entry { display: block; margin-bottom: 6px; }
+.cite-number { flex: none; min-width: 3.2em; color: var(--muted); }
+.cite-key { flex: none; min-width: 4.2em; color: var(--accent); }
+.cite-entry.cited { background: color-mix(in srgb, var(--accent) 22%, transparent); border-left-color: var(--accent); }
+.banner.cite-from { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin: 4px 0; padding-top: 5px; padding-bottom: 5px; position: sticky; top: -8px; z-index: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--accent); box-shadow: 0 -9px 0 var(--surface); }
+.cite-from .actions { display: flex; gap: 6px; }
+/* One line of the list: its quantities, each beside its source. */
+table.line-sources { width: auto; min-width: min(620px, 100%); }
+.line-sources th, .line-sources td { text-align: left; white-space: normal; vertical-align: middle; padding: 0 22px 0 8px; height: 20px; line-height: 1.25; }
+.line-sources th { position: static; box-shadow: none; }
+.line-sources td:first-child { white-space: nowrap; color: var(--muted); }
+.line-sources .hint { display: inline; margin: 0; }
+.line-source button.link + button.link { margin-left: 8px; }
+.line-source button.link + .hint { margin-left: 8px; }
+.line-sources .edited-note { font-size: 11px; }
+.banner.cite-from[hidden] { display: none; }
+#line-table td.refs { white-space: nowrap; cursor: default; }
+
 
 .toasts { position: fixed; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; z-index: 50; max-width: 460px; }
 .toast { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 9px 12px; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); display: flex; gap: 10px; align-items: flex-start; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -304,10 +410,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .report textarea { width: 100%; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .report textarea.report-text { font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
 details.advanced { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; }
-details.advanced > summary { cursor: pointer; color: var(--muted); }
+/* no space under the title while folded, or it sits high in its frame */
+details.advanced > summary { cursor: pointer; color: var(--muted); margin-bottom: 0; }
 details.advanced[open] > summary { margin-bottom: 4px; }
 .command { display: flex; gap: 10px; align-items: center; margin: 4px 0; }
-.command code { flex: 1; overflow-x: auto; white-space: nowrap; font: 12px ui-monospace, Menlo, Consolas, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+/* Long paths wrap: a scrollbar would cover the text below, and hide the end. */
+.command code { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px ui-monospace, Menlo, Consolas, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 .versions { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
 .versions li { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; padding: 8px 12px; }
 .versions li + li { border-top: 1px solid var(--border); }
@@ -331,6 +439,13 @@ button.link { border: 0; background: transparent; padding: 0; color: var(--accen
 .kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 4px 10px; overflow-wrap: anywhere; }
 .kv span:nth-child(odd) { color: var(--muted); }
 
+/* Near the narrowest window the top bar has no room to spare. */
+@media (max-width: 990px) {
+  .topbar { gap: 8px; padding-left: 8px; padding-right: 8px; }
+  .topbar .group { gap: 3px; }
+  .topbar .group button, .topbar button.ghost { padding-left: 7px; padding-right: 7px; }
+  .brand { gap: 5px; }
+}
 @media (max-width: 880px) {
   .layout { grid-template-columns: 250px minmax(0, 1fr); }
   .topbar { flex-wrap: wrap; row-gap: 6px; }

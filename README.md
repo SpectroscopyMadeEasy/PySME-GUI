@@ -5,7 +5,8 @@ set up a star, synthesize a spectrum, compare it with an observation, edit the
 mask, and fit stellar parameters or abundances.
 
 **This is an alpha version** for internal testing (see
-[RELEASING.md](RELEASING.md)).
+[RELEASING.md](RELEASING.md)). The interface says so beside its name, *alpha* or
+*beta*, taken from the version number; a final release shows nothing there.
 
 ![PySME-GUI after a fit, shown in light mode above the diagonal and in dark mode below it](assets/screenshot-light-dark.png)
 
@@ -52,10 +53,40 @@ Intel Macs are not supported because PySME publishes no binary packages for them
   `wave flux error`, `wave flux error mask`, or `segment wave flux [error]`. A
   header row with column names overrides the guess. Wavelengths are in Å and
   must be in the same medium (air or vacuum) as the line list.
-- **Mask:** choose *Line*, *Continuum* or *Exclude* above the plot and drag across
-  pixels.
-- **Fit:** pick free parameters in the *Fit* tab, or tick *Fit this abundance* in
-  the periodic table, then press *Fit*.
+- **Mask:** choose *Line mask*, *Continuum mask*, *Velocity mask* or *Remove mask*
+  above the plot and drag across pixels; click the button again to go back to
+  zooming. The arrow next to *Remove mask* chooses whether it takes off all masks
+  or only one kind. As in PySME, a pixel can carry several masks; the strip under
+  the spectrum is then divided, line on top, continuum, velocity. Pixels with the
+  line mask are the ones fitted. Without a mask, pixels are not used.
+- **Radial velocity:** its value is on the *Star* tab, and *v_rad* on the *Fit* tab
+  makes it a free parameter (one for all segments, or one each). *Synthesize* uses
+  the value shown; *Fit* finds it. PySME finds it apart from the other parameters
+  and gives no uncertainty. The velocity mask appears while *v_rad* is free. Until
+  you change it, it is the line mask, which is what PySME uses when no pixel is
+  marked for the velocity; once any is, only those count. PySME searches within
+  ±500 km/s, so with only a few weak lines marked it can match them to other lines:
+  check the result against the plot.
+- **Size:** ⌘+ and ⌘− scale the whole interface and ⌘0 restores it (in a web
+  browser, use the browser's own zoom).
+- **Line data:** the *ref* link of a line shows everything the list holds on it,
+  each value beside its source, and those references only. For a long-format
+  VALD list the source of each quantity follows from VALD's fixed order.
+- **Fit:** pick free parameters in the *Fit* tab, or mark abundances in the
+  periodic table, then press *Fit*.
+- **Abundances and NLTE:** in the periodic table under *Abundances*, the **N** in
+  the corner of an element turns NLTE on for it (outlined where a grid exists,
+  filled when on; the grid is chosen on the right). Point at an element to get the
+  dot that makes its abundance a free parameter.
+- **[X/Fe]:** switch the table from A(X) to [X/Fe] to read and type abundances
+  relative to the *Solar reference*; the Fe box then holds [Fe/H], and H and He
+  stay A(X). Typing changes that element only, so a new Fe moves the others'
+  [X/Fe]. Choosing another reference changes no abundance. Fit results list [X/Fe]
+  too. Its errors are PySME's own for that element, without those of Fe or of the
+  solar values; none are given when Fe was fitted as well.
+- **Abundance pattern:** the switch above the plot shows A(X) or [X/Fe] against
+  atomic number, with error bars from the last fit while its values are unchanged.
+  Click a point to select that element in the table.
 - **Light or dark:** the button at the top right (*View → Appearance* on macOS)
   matches the system, or stays light or dark. The choice is remembered, and
   exported PNG figures are always light.
@@ -82,7 +113,7 @@ settings*. Updates are checked quietly at start-up (a dot marks the button);
 nothing is installed or switched on its own.
 
 **Interface.** *Update interface* installs the newest release tag in your update
-channel (released versions, or beta versions too) and checks that it starts with
+channel (release only, which is the default, or release + beta) and checks that it starts with
 your current PySME; your PySME version is not changed. If the new interface does not support that version, it says so and
 changes nothing. *Back to previous interface* undoes it.
 

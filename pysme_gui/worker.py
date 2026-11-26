@@ -26,15 +26,20 @@ def prepare(sme, job):
     if not job["has_obs"]:
         for name in ("synth", "cont", "spec", "uncs", "mask", "telluric"):
             setattr(sme, name, None)
-        vrad = np.atleast_1d(sme.vrad)[0]
+        vrad = float(np.atleast_1d(sme.vrad)[0])
         sme.wave = None
         sme.wran = np.array(job["ranges"], dtype=float)
-        # Without data there is nothing to fit a velocity or continuum to.
+        # Without data there is nothing to fit a velocity or continuum to. PySME
+        # switches both off and sets the velocity to 0 in what it returns, so the
+        # settings, which are for the observation, are put back after the run.
+        restore = {
+            "vrad_flag": sme.vrad_flag,
+            "cscale_flag": sme.cscale_flag,
+            "vrad": np.full(len(job["ranges"]), vrad),
+        }
         if sme.vrad_flag in ("whole", "each"):
-            restore["vrad_flag"] = sme.vrad_flag
             sme.vrad_flag = "fix"
         if sme.cscale_flag not in ("none", "fix"):
-            restore["cscale_flag"] = sme.cscale_flag
             sme.cscale_flag = "none"
         step = job.get("step")
         if step:
@@ -46,11 +51,17 @@ def prepare(sme, job):
         nseg = len(job["ranges"])
         sme.vrad = np.full(nseg, vrad)
         sme.cscale = None
-    elif sme.uncs is None:
-        sme.uncs = [
-            np.full(len(sme.spec[i]), abs(np.nanmedian(sme.spec[i])) / job["snr"] or 1.0 / job["snr"])
-            for i in range(len(sme.spec))
-        ]
+    else:
+        if sme.uncs is None:
+            sme.uncs = [
+                np.full(len(sme.spec[i]), abs(np.nanmedian(sme.spec[i])) / job["snr"] or 1.0 / job["snr"])
+                for i in range(len(sme.spec))
+            ]
+        # A velocity that is free is found by a fit only, like every other free
+        # parameter. PySME would otherwise find it in every synthesis.
+        if job["kind"] == "synth" and sme.vrad_flag in ("whole", "each"):
+            restore["vrad_flag"] = sme.vrad_flag
+            sme.vrad_flag = "fix"
     return restore
 
 
@@ -67,10 +78,17 @@ def run(directory):
         from pysme.synthesize import synthesize_spectrum
 
         sme = synthesize_spectrum(sme)
-    elif job["kind"] == "fit":
+    elif job["kind"] == "fit" and job["parameters"]:
         from pysme.solve import solve
 
         sme = solve(sme, list(job["parameters"]))
+    elif job["kind"] == "fit":
+        # Only the velocity is free. PySME's solve() fails without another
+        # parameter; a synthesis that may fit the velocity does the same job.
+        from pysme.synthesize import synthesize_spectrum
+
+        sme.fitresults.clear()              # nothing of an earlier fit
+        sme = synthesize_spectrum(sme)
     else:
         raise ValueError(f"Unknown job kind {job['kind']}")
 

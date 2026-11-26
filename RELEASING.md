@@ -65,15 +65,16 @@ Windows support is **not written yet**. It needs, at least:
 
 | Update channel | Receives |
 |---|---|
-| released versions only | releases |
-| beta versions too | beta, release candidates, releases |
-| alpha (shown only to those already in it) | everything |
+| release only (the default) | releases |
+| release + beta | beta, release candidates, releases |
+| release + beta + alpha (shown only to those already in it) | everything |
 
-The first installation sets the channel from the stage of what is installed.
-Later installations keep it. So a beta tester who moves to `0.3.0` still gets
-`0.4.0b1`, but not `0.4.0a1`. Choosing a stricter channel never downgrades.
-Internal testers can set `"channel": "alpha"` in `settings.json` in the app's
-data folder.
+Every new installation receives releases only, whatever stage is installed.
+**Beta testers have to choose release + beta** in *Updates & settings*; tell them
+so in the invitation. A choice once made is kept by later installations, so a
+beta tester who moves to `0.3.0` still gets `0.4.0b1`, but not `0.4.0a1`.
+Choosing a stricter channel never downgrades. Internal testers can set
+`"channel": "alpha"` in `settings.json` in the app's data folder.
 
 ## Making a release
 

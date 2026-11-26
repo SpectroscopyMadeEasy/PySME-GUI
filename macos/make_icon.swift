@@ -30,8 +30,11 @@ func render(_ pixels: Int) -> Data {
     context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     context.fillPath()
 
-    // The logo as it is: its emblem, in its own black, on white.
-    let box = size * 0.58
+    // The logo as it is: its emblem, in its own black, on white, about as tall
+    // in the tile as the glyphs of other apps.
+    // Check any other size as the system shows it (NSWorkspace icon of the built
+    // app): macOS 26 draws some sizes grey and soft, e.g. 0.62, 0.648 and 0.70.
+    let box = size * 0.682
     let ratio = CGFloat(emblem.width) / CGFloat(emblem.height)
     context.interpolationQuality = .high
     context.draw(emblem, in: CGRect(x: (size - box * ratio) / 2, y: (size - box) / 2,
