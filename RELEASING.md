@@ -17,24 +17,24 @@ After a release, fixes become `0.3.1`; new features start again at `0.4.0a1`.
 "Alpha is internal" means it is not announced and promises nothing. The
 repository is public, so anyone can still see the tags and the code.
 
-The interface and PySME are versioned separately. Each interface release
-recommends a **final** PySME release (`PYSME_RECOMMENDED`).
+The interface and PySME are versioned separately. Each interface release names
+the PySME that new users get (`PYSME_RECOMMENDED`). A final interface release
+recommends a **final** PySME release; an alpha or beta may recommend a release
+candidate. 0.3.0 begins with `1.3.0rc2`, the first PySME with a package for
+Windows.
 
 ## Platforms
 
-From 0.3.0, macOS (Apple silicon), Linux (x86_64) and Windows (x86_64) are
-supported. The maintainers have no Windows machine, so Windows and Linux are
-tried on real computers by beta testers. Because beta is a feature freeze, all
-platform code must be written during alpha.
+From 0.3.0, macOS (Apple silicon, 15 or newer: PySME 1.3 has no packages for
+older ones), Linux (x86_64) and Windows (x86_64) are supported. The maintainers
+have no Windows machine, so Windows and Linux are tried on real computers by
+beta testers. Because beta is a feature freeze, all platform code must be
+written during alpha.
 
-Windows support is **not written yet**. It needs, at least:
-
-- a PySME release with the Windows fixes, as a ready-made Windows package. It
-  will not be on PyPI; for now the app lists and downloads it from GitHub
-  releases (users without access to GitHub cannot install on Windows until
-  another place is added);
-- an installer that needs no administrator rights;
-- changes in the environment manager, process handling and file browser.
+On Linux and Windows the interface opens in the web browser. PySME for Windows
+is not on PyPI; for now the app lists and downloads it from PySME's GitHub
+releases (users without access to GitHub cannot install on Windows until another
+place is added). The Windows version has so far run only on GitHub's machines.
 
 ## From alpha to beta
 
@@ -53,6 +53,7 @@ Windows support is **not written yet**. It needs, at least:
 
 ## From beta to release
 
+- `PYSME_RECOMMENDED` is a final PySME release.
 - On **each** of macOS, Linux and Windows, an outside tester installs from
   scratch, synthesizes and fits. At least one tester is a student who does not
   develop software.

@@ -10,6 +10,7 @@ The interface and PySME are versioned separately. Layout under the app home::
     envs/<id>/lock.txt     the exact version of every package in it
     current.json           which interface and environment are in use
     current.sh             the same two names, for the Linux launcher
+    launch.py, bin/uv.exe  the Windows launcher and installer tool
     python/, cache/        interpreters and wheels managed by uv
     settings.json          user settings
 
@@ -36,14 +37,19 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
+from email.utils import parsedate_to_datetime
 
 PYTHON_VERSION = "3.12"
 PACKAGE = "pysme-astro"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 SOURCE_ENV = "PYSME_GUI_UPDATE_SOURCE"
+# PySME for Windows is published with PySME's releases on GitHub, from this one on.
+PYSME_REPO = "SpectroscopyMadeEasy/PySME"
+FIRST_WINDOWS_PYSME = "1.3.0rc2"
 
 # Interface releases are git tags. Older tags belong to the Electron program.
 RELEASE_TAG = re.compile(rb"refs/tags/v(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?)(?=[\s\x00^]|$)")
@@ -61,14 +67,32 @@ def app_home():
         return os.path.abspath(os.environ["PYSME_GUI_HOME"])
     if sys.platform == "darwin":
         return os.path.expanduser("~/Library/Application Support/PySME-GUI")
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+        return os.path.join(base, "PySME-GUI")
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return os.path.join(base, "pysme-gui")
 
 
+def _patiently(action):
+    """Run a file operation that Windows may refuse for a moment, while another
+    request or a virus scanner has the file open."""
+    for attempt in range(20):
+        try:
+            return action()
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
 def _read_json(path, default):
-    try:
+    def read():
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
+
+    try:
+        return _patiently(read)
     except (OSError, ValueError):
         return default
 
@@ -82,7 +106,7 @@ def _write_text(path, text):
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(text)
         os.chmod(temp, 0o644)
-        os.replace(temp, path)
+        _patiently(lambda: os.replace(temp, path))
     except BaseException:
         if os.path.exists(temp):
             os.remove(temp)
@@ -118,8 +142,16 @@ def _new_id():
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
 
 
+def is_within(path, directory):
+    """True if ``path`` lies inside ``directory`` (Windows ignores letter case)."""
+    def real(name):
+        return os.path.normcase(os.path.realpath(name))
+
+    return real(path).startswith(real(directory).rstrip(os.sep) + os.sep)
+
+
 def _is_running_from(directory):
-    return os.path.realpath(sys.prefix).startswith(os.path.realpath(directory) + os.sep)
+    return is_within(sys.prefix, directory)
 
 
 # ------------------------------------------------------------------- versions
@@ -232,8 +264,15 @@ def env_dir(env_id):
     return os.path.join(app_home(), "envs", env_id)
 
 
+def venv_python(venv):
+    """The Python of a virtual environment."""
+    if sys.platform == "win32":
+        return os.path.join(venv, "Scripts", "python.exe")
+    return os.path.join(venv, "bin", "python")
+
+
 def env_python(env_id):
-    return os.path.join(env_dir(env_id), "venv", "bin", "python")
+    return venv_python(os.path.join(env_dir(env_id), "venv"))
 
 
 def env_info(env_id):
@@ -251,7 +290,8 @@ def installed_envs():
         names = os.listdir(os.path.join(app_home(), "envs"))
     except OSError:
         return []
-    found = [info for info in map(env_info, names) if info]
+    # A name starting with a dot is an installation that is being removed.
+    found = [info for info in (env_info(n) for n in names if not n.startswith(".")) if info]
     return sorted(found, key=lambda i: (version_key(i["pysme_version"]), i["created"]), reverse=True)
 
 
@@ -298,10 +338,10 @@ def activate(gui_id, env_id, bundle_id=None, notice=None, log=print):
 def _prune_gui(keep, log):
     """Old interface copies are tiny and replaceable, unlike environments."""
     root = os.path.join(app_home(), "gui")
-    running = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    running = os.path.dirname(os.path.abspath(__file__))
     for name in os.listdir(root):
         path = os.path.join(root, name)
-        if name in keep or running.startswith(os.path.realpath(path) + os.sep):
+        if name in keep or is_within(running, path):
             continue
         shutil.rmtree(path, ignore_errors=True)
 
@@ -315,7 +355,17 @@ def remove_env(env_id, log=print):
     if _is_running_from(env_dir(env_id)):
         raise RuntimeError("This PySME is still running. Restart first.")
     log(f"Removing PySME {env_info(env_id)['pysme_version']}")
-    shutil.rmtree(env_dir(env_id))
+    # Renamed first: Windows refuses that while a program still uses the files,
+    # so an installation in use is never left half removed.
+    doomed = os.path.join(app_home(), "envs", f".removing-{env_id}")
+    try:
+        _patiently(lambda: os.rename(env_dir(env_id), doomed))
+    except PermissionError:
+        raise RuntimeError(
+            "This PySME is still in use, perhaps by another PySME window. "
+            "Close it and try again."
+        )
+    shutil.rmtree(doomed, ignore_errors=True)
     if (record.get("previous") or {}).get("env") == env_id:
         record["previous"] = None
         _write_record(record)
@@ -331,13 +381,16 @@ def uv_environment():
     env["UV_CACHE_DIR"] = os.path.join(home, "cache")
     for name in ("VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME", "CONDA_PREFIX"):
         env.pop(name, None)
+    if sys.platform == "win32":
+        # Pythons we start read and write UTF-8, whatever the system's code page.
+        env["PYTHONUTF8"] = "1"
     return env
 
 
 def find_uv():
     candidates = [
         os.environ.get("PYSME_GUI_UV"),
-        os.path.join(app_home(), "bin", "uv"),
+        os.path.join(app_home(), "bin", "uv.exe" if sys.platform == "win32" else "uv"),
         shutil.which("uv"),
     ]
     for path in candidates:
@@ -349,7 +402,7 @@ def find_uv():
 def _run(command, log, env, cwd=None):
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, errors="replace", env=env, cwd=cwd,
+        text=True, encoding="utf-8", errors="replace", env=env, cwd=cwd,
     )
     output = []
     for line in process.stdout:
@@ -365,7 +418,8 @@ def _run(command, log, env, cwd=None):
 
 def _freeze(uv, python, env):
     result = subprocess.run(
-        [uv, "pip", "freeze", "--python", python], capture_output=True, text=True, env=env,
+        [uv, "pip", "freeze", "--python", python], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"Could not list the installed packages:\n{result.stderr.strip()}")
@@ -374,9 +428,9 @@ def _freeze(uv, python, env):
 
 SMOKE_TEST = (
     "import json, platform, pysme, pysme_gui, pysme_gui.server\n"
-    "from pysme.smelib import _smelib\n"
+    "from pysme.sme_synth import SME_DLL\n"
     "print('SMOKE ' + json.dumps({'pysme': pysme.__version__, "
-    "'smelib': str(_smelib.LibraryVersion()), 'gui': pysme_gui.__version__, "
+    "'smelib': str(SME_DLL().SMELibraryVersion()), 'gui': pysme_gui.__version__, "
     "'python': platform.python_version()}))\n"
 )
 
@@ -417,7 +471,7 @@ def create_env(version, gui_id, lock=None, log=print):
             _write_text(os.path.join(directory, "wanted.txt"), lock)
             command += ["-r", os.path.join(directory, "wanted.txt")]
         else:
-            command.append(f"{PACKAGE}=={version}")
+            command.append(requirement(version))
         _run(command, log, env)
         log("STEP 3/3 Checking that PySME runs")
         versions = smoke_test(gui_id, python, log)
@@ -434,6 +488,21 @@ def create_env(version, gui_id, lock=None, log=print):
         shutil.rmtree(directory, ignore_errors=True)
         raise
     return env_id
+
+
+def windows_wheel_url(version):
+    """Where a PySME release keeps its package for Windows."""
+    python = "cp" + PYTHON_VERSION.replace(".", "")
+    name = f"{PACKAGE.replace('-', '_')}-{version}-{python}-{python}-win_amd64.whl"
+    return f"https://github.com/{PYSME_REPO}/releases/download/v{version}/{name}"
+
+
+def requirement(version):
+    """What to ask the installer for. PySME for Windows is not on PyPI; it comes
+    from its release on GitHub."""
+    if sys.platform == "win32":
+        return f"{PACKAGE} @ {windows_wheel_url(version)}"
+    return f"{PACKAGE}=={version}"
 
 
 def read_lock(env_id):
@@ -520,7 +589,10 @@ def setup(source, bundle_id=None, repair=False, log=print):
         raise
     activate(gui_id, env_id, bundle_id=bundle_id, notice=notice, log=log)
     if replaced and not _is_running_from(env_dir(replaced)):
-        remove_env(replaced, log=log)
+        try:
+            remove_env(replaced, log=log)
+        except (OSError, RuntimeError) as exc:      # the repair itself succeeded
+            log(f"The replaced installation was kept: {exc}")
     log(f"Using PySME {env_info(env_id)['pysme_version']} with PySME-GUI {constants['version']}.")
     return env_id
 
@@ -676,7 +748,48 @@ def parse_releases(data, system=None):
     return sorted(found, key=lambda r: version_key(r["version"]), reverse=True)
 
 
+def _file_date(url):
+    """The date of a downloadable file, "" if not stated, None if there is none.
+    Only its description is fetched. Unlike GitHub's web API this has no hourly
+    limit."""
+    request = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": "PySME-GUI-updater"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            stated = response.headers.get("Last-Modified")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+    try:
+        return parsedate_to_datetime(stated).strftime("%Y-%m-%d") if stated else ""
+    except (TypeError, ValueError):
+        return ""
+
+
+def windows_releases():
+    """PySME releases with a package for Windows, newest first."""
+    url = f"https://github.com/{PYSME_REPO}.git/info/refs?service=git-upload-pack"
+    tags = {m.decode() for m in RELEASE_TAG.findall(_download(url))}
+    first = version_key(FIRST_WINDOWS_PYSME)
+    found = []
+    for version in sorted(tags, key=version_key, reverse=True):
+        if version_key(version) < first:
+            break
+        date = _file_date(windows_wheel_url(version))
+        if date is not None:
+            found.append(
+                {"version": version, "prerelease": is_prerelease(version), "date": date}
+            )
+    return found
+
+
 def available_pysme():
+    if sys.platform == "win32":
+        if platform.machine().lower() != "amd64":
+            return []
+        return windows_releases()
     return parse_releases(json.loads(_download(PYPI_URL, timeout=40)))
 
 

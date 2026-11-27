@@ -13,7 +13,7 @@ UPDATE_REPO = "SpectroscopyMadeEasy/PySME-GUI"
 # PySME versions this interface works with (pysme-astro on PyPI). New users get
 # the recommended one; test it with this interface before every release. Users
 # keep the version they chose as long as it stays within these limits.
-PYSME_RECOMMENDED = "1.2.0"
+PYSME_RECOMMENDED = "1.3.0rc2"
 PYSME_MINIMUM = "1.2.0"
 PYSME_BELOW = "2.0"
 

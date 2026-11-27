@@ -200,9 +200,9 @@ def software_versions():
     from . import __version__
 
     try:
-        from pysme.smelib import _smelib
+        from pysme.sme_synth import SME_DLL
 
-        smelib = str(_smelib.LibraryVersion())
+        smelib = str(SME_DLL().SMELibraryVersion())
         # "SME Library version: ... [SMElib ref: v6.13.20]" -> "v6.13.20"
         reference = re.search(r"ref: (v[\w.]+)", smelib)
         smelib = reference.group(1) if reference else smelib

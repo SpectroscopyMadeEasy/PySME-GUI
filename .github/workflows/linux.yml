@@ -38,7 +38,7 @@ jobs:
       - name: The installed program starts, synthesizes and quits
         run: |
           rm -rf "$RUNNER_TEMP/download"      # it must not depend on the download
-          HOME="$RUNNER_TEMP/user home" python3 linux/smoke.py "$RUNNER_TEMP/user home/.local/bin/pysme-gui"
+          HOME="$RUNNER_TEMP/user home" python3 tools/smoke.py "$RUNNER_TEMP/user home/.local/bin/pysme-gui"
 
       - name: Automated tests with the installed PySME
         run: |

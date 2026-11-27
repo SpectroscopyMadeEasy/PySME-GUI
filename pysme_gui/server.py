@@ -24,12 +24,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import FEEDBACK_EMAIL, ISSUE_REPO, __version__, envmanager, instance, report
+from .envmanager import is_within
 from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 THEMES = ("auto", "light", "dark")
 MAX_BODY = 5_000_000
+# Stated here: Windows takes these from its registry, where other programs may
+# have changed them, and a browser then refuses to run the page's script.
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
 
 
 class _BufferHandler(logging.Handler):
@@ -50,20 +62,16 @@ def pysme_version():
 
 def smelib_version():
     try:
-        from pysme.smelib import _smelib
+        from pysme.sme_synth import SME_DLL
 
-        return str(_smelib.LibraryVersion())
+        return str(SME_DLL().SMELibraryVersion())
     except Exception as exc:
         return f"not loadable: {exc}"
 
 
-def _inside(path, directory):
-    return os.path.realpath(path).startswith(os.path.realpath(directory) + os.sep)
-
-
 def is_managed():
     """True when this interpreter belongs to one of the app's own environments."""
-    return _inside(sys.prefix, os.path.join(envmanager.app_home(), "envs"))
+    return is_within(sys.prefix, os.path.join(envmanager.app_home(), "envs"))
 
 
 def own_constants():
@@ -140,7 +148,7 @@ class Updater:
             dict(
                 info,
                 selected=info["id"] == selected,
-                running=_inside(sys.prefix, envmanager.env_dir(info["id"])),
+                running=is_within(sys.prefix, envmanager.env_dir(info["id"])),
                 supported=envmanager.supports(constants, info["pysme_version"]),
             )
             for info in envmanager.installed_envs()
@@ -155,7 +163,7 @@ class Updater:
         gui_id = envmanager.selection(record)[0]
         restart = managed and bool(gui_id) and (
             any(e["selected"] and not e["running"] for e in environments)
-            or not _inside(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
+            or not is_within(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
         )
         custom = envmanager.settings().get("python")
         custom_pysme = envmanager.settings().get("python_pysme")
@@ -310,7 +318,7 @@ def same_program(first, second):
     """
     def where(path):
         folder, name = os.path.split(os.path.abspath(path))
-        return os.path.join(os.path.realpath(folder), name)
+        return os.path.normcase(os.path.join(os.path.realpath(folder), name))
 
     return where(first) == where(second)
 
@@ -337,12 +345,19 @@ def set_custom_python(path, accept_unsupported=False):
     if not path:
         envmanager.change_settings(remove=("python", "python_pysme"))
         return None
-    path = os.path.abspath(os.path.expanduser(path)) if os.sep in path else path
+    if os.path.dirname(path) or path.startswith("~"):
+        path = os.path.abspath(os.path.expanduser(path))
+    windows = sys.platform == "win32"
     if os.path.isdir(path):
-        inside = os.path.join(path, "bin", "python")
-        hint = f" Did you mean {inside}?" if os.path.isfile(inside) else ""
+        places = [envmanager.venv_python(path)]
+        if windows:
+            places.append(os.path.join(path, "python.exe"))       # a conda environment
+        inside = next((p for p in places if os.path.isfile(p)), None)
+        hint = f" Did you mean {inside}?" if inside else ""
         raise UserError(f"That is a folder; enter the Python program inside it.{hint}")
-    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+    # Windows calls every file executable, so there the name has to tell.
+    runnable = path.lower().endswith(".exe") if windows else os.access(path, os.X_OK)
+    if not os.path.isfile(path) or not runnable:
         raise UserError(f"Not an executable Python: {path}. Enter its full path.")
 
     interface = _next_interface()
@@ -390,6 +405,13 @@ def index_page():
     return page
 
 
+def drives():
+    if hasattr(os, "listdrives"):          # Python 3.12 and newer
+        return os.listdrives()
+    letters = (f"{chr(c)}:\\" for c in range(ord("A"), ord("Z") + 1))
+    return [d for d in letters if os.path.isdir(d)]
+
+
 def list_directory(path):
     path = os.path.abspath(os.path.expanduser(path or "~"))
     if not os.path.isdir(path):
@@ -407,7 +429,11 @@ def list_directory(path):
     except PermissionError:
         raise UserError(f"No permission to read {path}")
     entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
-    return {"dir": path, "parent": os.path.dirname(path), "entries": entries[:3000]}
+    result = {"dir": path, "parent": os.path.dirname(path), "entries": entries[:3000]}
+    if sys.platform == "win32":
+        # ".." ends at the top of a drive, so the others are offered beside it.
+        result["drives"] = drives()
+    return result
 
 
 class App:
@@ -668,7 +694,8 @@ def make_handler(app):
                     content = handle.read()
             except OSError:
                 return self._json({"error": "Not found"}, 404)
-            kind = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            kind = (CONTENT_TYPES.get(os.path.splitext(path)[1].lower())
+                    or mimetypes.guess_type(path)[0] or "application/octet-stream")
             self._send(200, content, kind, cache)
 
         def do_POST(self):

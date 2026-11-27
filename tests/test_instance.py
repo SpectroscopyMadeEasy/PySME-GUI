@@ -51,8 +51,10 @@ def test_a_running_interface_is_found_and_a_gone_one_is_not(home, served):
     assert instance.running() is None
     instance.register(url)
     record = home / "running.json"
-    # It holds the access token: nobody else on the computer may read it.
-    assert stat.S_IMODE(os.stat(record).st_mode) == 0o600
+    # It holds the access token: nobody else on the computer may read it. (On
+    # Windows the user's own app folder already keeps others out.)
+    if os.name == "posix":
+        assert stat.S_IMODE(os.stat(record).st_mode) == 0o600
     assert instance.running() == url
 
     # A second interface does not take the place of the one that runs.

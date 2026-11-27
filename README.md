@@ -15,7 +15,7 @@ lower right: dark mode).*
 
 ## Install
 
-### macOS (Apple Silicon, macOS 14 or newer)
+### macOS (Apple Silicon, macOS 15 or newer)
 
 1. Open `PySME-<version>-arm64.dmg`.
 2. Drag **PySME** onto **Applications**.
@@ -49,9 +49,32 @@ Closing the tab leaves it running with everything in it, and starting PySME
 again shows it. What it prints when started from the menu is kept in
 `~/.local/share/pysme-gui/pysme-gui.log`.
 
-Windows is planned for 0.3.0 and **does not work yet** (see
-[RELEASING.md](RELEASING.md)). Linux has not been tried on a real computer yet.
-Intel Macs are not supported because PySME publishes no binary packages for them.
+### Windows (64-bit, x86)
+
+**New and little tried:** so far it has run only on GitHub's Windows machines.
+
+1. Download the source archive (`Source code (zip)`) of a release from the
+   repository's *Releases* page.
+2. **Extract the whole zip file** (right-click, *Extract All…*).
+3. In the extracted folder, open `windows` and double-click
+   **Install PySME.cmd**. If Windows shows *Windows protected your PC*, choose
+   *More info → Run anyway*; the scripts are not signed.
+
+It needs no administrator rights. It needs a network connection that reaches
+github.com: Python's installer and PySME for Windows are downloaded from there,
+the other packages from PyPI. It puts a **PySME** shortcut on the desktop and in
+the Start menu; the downloaded folder can be deleted afterwards (keep it, or
+download again, to remove PySME with `windows\Uninstall PySME.cmd`).
+
+The interface opens in your web browser. To quit, choose *⋯ → Quit PySME*.
+Closing the tab leaves it running with everything in it, and starting PySME
+again shows it. What it prints is kept in
+`%LOCALAPPDATA%\PySME-GUI\pysme-gui.log`. To repair an installation, run
+`install.ps1 -Repair` (in PowerShell:
+`powershell -ExecutionPolicy Bypass -File "windows\install.ps1" -Repair`).
+
+Linux has not been tried on a real computer yet. Intel Macs and Windows on ARM
+are not supported because PySME publishes no binary packages for them.
 
 ## Using it
 
@@ -128,7 +151,7 @@ your current PySME; your PySME version is not changed. If the new interface does
 changes nothing. *Back to previous interface* undoes it.
 
 **PySME.** Several versions can be installed side by side. *Install* adds one
-from PyPI without switching to it; *Use* switches (after a restart); *Remove*
+from PyPI (on Windows, from PySME's releases on GitHub) without switching to it; *Use* switches (after a restart); *Remove*
 deletes one that is not in use. Only releases with a ready-made package for your
 computer are listed, pre-releases only on request. This interface supports the
 range given by `PYSME_MINIMUM` and `PYSME_BELOW`, and new users get
@@ -141,7 +164,7 @@ get the same installation as the app), or save the *Package list…* and install
 elsewhere with Python 3.12:
 
 ```bash
-pip install --only-binary pysme-astro -r pysme-1.2.0-packages.txt
+pip install --only-binary pysme-astro -r pysme-1.3.0rc2-packages.txt
 ```
 
 Builds differ between systems, so results need not agree bit for bit. Model
@@ -189,7 +212,7 @@ and writes a shorter report.
 
 | What | Where |
 |---|---|
-| App environment, logs, settings | `~/Library/Application Support/PySME-GUI` (macOS), `~/.local/share/pysme-gui` (Linux) |
+| App environment, logs, settings | `~/Library/Application Support/PySME-GUI` (macOS), `~/.local/share/pysme-gui` (Linux), `%LOCALAPPDATA%\PySME-GUI` (Windows) |
 | Model atmospheres, NLTE grids | `~/.sme`, shared with other PySME installations |
 
 To uninstall on macOS, delete the app and the first folder. `~/.sme` is yours.

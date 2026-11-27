@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -203,6 +204,7 @@ def test_failed_setup_leaves_current_untouched(home, monkeypatch):
     assert os.listdir(os.path.join(envmanager.app_home(), "gui")) == guis
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in uv is a shell script")
 def test_failed_download_leaves_no_half_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path / "home"))
     fake_uv = tmp_path / "uv"

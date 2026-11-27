@@ -173,7 +173,7 @@ function renderTop() {
   $("#btn-stop").hidden = !busy;
   for (const id of ["#btn-new", "#btn-open", "#btn-import", "#btn-save"]) $(id).disabled = busy;
   $("#forms").disabled = busy;
-  const name = S.path ? S.path.split("/").pop() : "Untitled";
+  const name = S.path ? baseName(S.path) : "Untitled";
   document.title = `${name}${S.dirty ? " •" : ""} — PySME`;
   $("#btn-quit").hidden = !S.can_quit;          // the Mac app has its own menu
   const badge = $("#stage-badge");
@@ -469,7 +469,7 @@ function renderLinelistCard() {
     card.append(
       h("b", {}, `${list.nlines.toLocaleString()} lines`),
       h("div", {}, `${fixed(list.wmin, 2)} – ${fixed(list.wmax, 2)} Å (${list.medium}), ${list.format} format`),
-      h("div", { class: "hint" }, list.file ? list.file.split("/").pop() : "stored in the SME file"));
+      h("div", { class: "hint" }, list.file ? baseName(list.file) : "stored in the SME file"));
     card.lastChild.title = list.file || "";
     if (list.edited) {
       card.append(h("div", { class: "edited-note" }, `${list.edited} line${list.edited > 1 ? "s" : ""} edited here (see the Line list tab). The file is unchanged.`));
@@ -1700,6 +1700,13 @@ window.__nativeReply = (id, path) => {
 };
 const toNative = (message) => window.webkit.messageHandlers.native.postMessage(message);
 
+/* Paths come from the computer that runs the program, which may be Windows. */
+const isWindowsPath = (path) => /^([A-Za-z]:|\\\\)/.test(path);
+const baseName = (path) => path.split(isWindowsPath(path) ? /[\\/]/ : "/").pop();
+const isAbsolutePath = (path) => /^([\\/~]|[A-Za-z]:[\\/])/.test(path);
+const joinPath = (folder, name) =>
+  `${folder.replace(isWindowsPath(folder) ? /[\\/]+$/ : /\/+$/, "")}/${name}`;
+
 /* Native panel inside the Mac app, a small built-in browser otherwise. */
 function pickFile({ mode, title, extensions = [], name = "" }) {
   if (NATIVE) {
@@ -1722,7 +1729,7 @@ function browseDialog({ mode, title, extensions, name }) {
     const confirm = () => {
       const value = filename.value.trim();
       if (!value) return;
-      result = value.startsWith("/") || value.startsWith("~") ? value : `${directory.replace(/\/$/, "")}/${value}`;
+      result = isAbsolutePath(value) ? value : joinPath(directory, value);
       localStorageSet("pysme-dir", directory);
       $("#dialog").close();
     };
@@ -1740,9 +1747,10 @@ function browseDialog({ mode, title, extensions, name }) {
       const wanted = (entry) => entry.dir || !extensions.length || extensions.some((x) => entry.name.toLowerCase().endsWith("." + x));
       files.replaceChildren(
         h("li", {}, h("button", { onclick: () => list(data.parent) }, "📁 ..")),
+        ...(data.drives || []).map((drive) => h("li", {}, h("button", { onclick: () => list(drive) }, `💽 ${drive}`))),
         ...data.entries.filter(wanted).map((entry) => h("li", {}, h("button", {
           onclick: (event) => {
-            if (entry.dir) return list(`${data.dir.replace(/\/$/, "")}/${entry.name}`);
+            if (entry.dir) return list(joinPath(data.dir, entry.name));
             filename.value = entry.name;
             $$("button.selected", files).forEach((b) => b.classList.remove("selected"));
             event.currentTarget.classList.add("selected");
@@ -1796,7 +1804,7 @@ async function showSettings(info) {
   if (task.state === "failed") body.append(h("p", { style: "color:var(--err);white-space:pre-wrap" }, `${task.title} failed. Nothing was changed.\n${task.error}`));
   if (info.restart) {
     body.append(h("div", { class: "card" }, h("b", {}, "Restart to apply the change. "),
-      NATIVE ? h("button", { class: "secondary", onclick: restartApp }, "Restart now") : h("span", {}, "Quit this process and start PySME-GUI again.")));
+      NATIVE ? h("button", { class: "secondary", onclick: restartApp }, "Restart now") : h("span", {}, "Quit PySME (⋯ → Quit PySME) and start it again.")));
   }
 
   /* the interface */
@@ -1982,7 +1990,9 @@ function installRow(info, busy, run) {
     return h("p", { class: "hint" }, "Press “Check for updates” to list the versions you can install.");
   }
   const installed = new Set(info.environments.map((e) => e.pysme_version));
-  const choices = releases.filter((r) => !installed.has(r.version) && (ui.prereleases || !r.prerelease));
+  /* The recommended one is always offered, also while it is a pre-release. */
+  const choices = releases.filter((r) => !installed.has(r.version) &&
+    (ui.prereleases || !r.prerelease || r.version === info.recommended));
   const select = h("select", { "aria-label": "Version to install", disabled: busy || !choices.length, onchange: () => { ui.installChoice = select.value; } },
     choices.map((r) => h("option", { value: r.version }, `${r.version}  (${r.date})${r.version === info.recommended ? " — recommended" : ""}${r.prerelease ? " — pre-release" : ""}`)));
   if (choices.some((r) => r.version === ui.installChoice)) select.value = ui.installChoice;
@@ -2156,7 +2166,7 @@ const commands = {
   },
   async saveAs() {
     commitEdits();
-    const path = await pickFile({ mode: "save", title: "Save as", extensions: ["sme"], name: S.path ? S.path.split("/").pop() : "spectrum.sme" });
+    const path = await pickFile({ mode: "save", title: "Save as", extensions: ["sme"], name: S.path ? baseName(S.path) : "spectrum.sme" });
     if (path && (await send("save", { path }))) toast("Saved.");
   },
   async exportCsv() {

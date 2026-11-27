@@ -49,22 +49,27 @@ def test_the_references_are_sorted_by_what_they_are_for():
 def test_pysme_and_sme_are_listed_newest_first_with_pysmes_own_papers():
     session = example()
     code = session.citations("plaintext")["sections"][0]["entries"]
-    assert [e["key"] for e in code] == [
-        "Jian2026", "2023A&A...671A.171W", "2017A&A...597A..16P", "1996A&AS..118..595V"]
+    # Newest first, each once, whether PySME names its own papers or the GUI adds them.
+    assert len(code) == 4
+    titles = ["survey-scale applications", "Spectroscopy Made Easier", "Spectroscopy Made Easy: Evolution",
+              "A new tool for fitting observations"]
+    for entry, title in zip(code, titles):
+        assert title.casefold() in entry["text"].casefold(), (title, entry["text"])
     jian, wehrhahn = code[0]["text"], code[1]["text"]
-    assert "Jönsson" in jian and "survey-scale applications" in jian and "711:A168" in jian
-    assert "Spectroscopy Made Easier" in wehrhahn and "671:A171" in wehrhahn
-    text = session.citations("plaintext")["text"]
-    assert text.index("survey-scale") < text.index("Made Easier") < text.index("Evolution")
-    assert "Jian2026" in pybtex.database.parse_string(
+    assert "Jönsson" in jian and "711:A168" in jian and "671:A171" in wehrhahn
+    keys_here = [e["key"] for e in code]
+    assert keys_here[0] in ("Jian2026", "2026A&A...711A.168J")    # the GUI's or PySME's
+    assert keys_here[1:] == ["2023A&A...671A.171W", "2017A&A...597A..16P", "1996A&AS..118..595V"]
+    assert keys_here[0] in pybtex.database.parse_string(
         session.citations("bibtex")["text"], "bibtex").entries
 
-    # Once PySME itself names a paper, it is not listed twice.
-    session.sme.citation_info += (
-        "\n@article{theirKey, title={PySME v1.0}, author={Jian, M.}, year={2026},"
-        " journal={A&A}, doi={10.1051/0004-6361/202659986}}\n")
-    keys_now = keys(session.citations("plaintext")["sections"], "code")
-    assert "theirKey" in keys_now and "Jian2026" not in keys_now and len(keys_now) == 4
+
+def test_a_paper_pysme_names_itself_is_not_listed_twice():
+    stored = ("\n@article{theirKey, title={PySME v1.0}, author={Jian, M.}, year={2026},"
+              " journal={A&A}, doi={10.1051/0004-6361/202659986}}\n")
+    names = [e["key"] for e in citations.code_entries(stored)]
+    assert names == ["theirKey", "2023A&A...671A.171W"]
+    assert [e["key"] for e in citations.code_entries("")] == ["Jian2026", "2023A&A...671A.171W"]
 
 
 def test_the_text_to_copy_keeps_the_sections_and_names_the_line_data():

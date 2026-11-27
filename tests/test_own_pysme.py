@@ -19,6 +19,11 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+# Windows runs only real programs; tests/test_windows.py covers what differs there.
+unix_only = pytest.mark.skipif(sys.platform == "win32",
+                               reason="uses shell scripts, links or the Unix layout")
+
+
 def fake_python(folder, version=None, error=None):
     """A stand-in interpreter that answers the start check."""
     path = folder / f"python-{version or 'broken'}"
@@ -42,12 +47,14 @@ def test_a_real_python_is_checked_with_the_interface_itself():
     }
 
 
+@unix_only
 def test_pasted_quotes_and_spaces_are_forgiven(home):
     python = fake_python(home, "1.2.0")
     assert set_custom_python(f'  "{python}"  ')["saved"]
     assert envmanager.settings()["python"] == python
 
 
+@unix_only
 def test_mistakes_are_explained_and_nothing_is_stored(home):
     (home / "env" / "bin").mkdir(parents=True)
     (home / "env" / "bin" / "python").write_text("")
@@ -65,6 +72,7 @@ def test_mistakes_are_explained_and_nothing_is_stored(home):
     assert envmanager.settings() == {"theme": "dark"}
 
 
+@unix_only
 def test_a_version_outside_the_range_needs_a_confirmation(home):
     old = fake_python(home, "1.1.0")
     found = set_custom_python(old)
@@ -76,12 +84,14 @@ def test_a_version_outside_the_range_needs_a_confirmation(home):
     assert info["restart"]                      # this process still runs another Python
 
 
+@unix_only
 def test_clearing_returns_to_the_app_and_keeps_other_settings(home):
     set_custom_python(fake_python(home, "1.2.1.dev3"))
     assert set_custom_python("   ") is None
     assert envmanager.settings() == {"theme": "dark"}
 
 
+@unix_only
 def test_the_settings_request_reports_what_was_found(home):
     app = App()
     answer = app.post("settings/python", {"python": fake_python(home, "1.3.0rc1")})
@@ -113,6 +123,7 @@ def test_settings_changed_at_the_same_time_are_all_kept():
     assert [n for n in os.listdir(envmanager.app_home()) if n.endswith(".tmp")] == []
 
 
+@unix_only
 def test_a_path_through_a_linked_folder_is_still_the_same_python(home):
     from pysme_gui.server import same_program
 

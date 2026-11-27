@@ -1,0 +1,4 @@
+# Line endings that the programs reading these files expect, also in downloads.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf

@@ -40,6 +40,30 @@ class LogBuffer:
             return [t for _, t in list(self.lines)[-count:]]
 
 
+def stop_process_tree(process, force=False):
+    """Stop a run together with the helper processes PySME started.
+
+    Windows cannot ask a program without a window to end, so there every stop
+    is a forced one.
+    """
+    if sys.platform != "win32":
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        return
+    system = os.environ.get("SystemRoot") or r"C:\Windows"
+    try:
+        subprocess.run(
+            [os.path.join(system, "System32", "taskkill.exe"),
+             "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+
+
 class JobManager:
     def __init__(self, session, session_lock, log):
         self.session = session
@@ -91,6 +115,8 @@ class JobManager:
             )
             env["PYTHONUNBUFFERED"] = "1"
             env.setdefault("MPLBACKEND", "Agg")
+            if sys.platform == "win32":
+                env["PYTHONUTF8"] = "1"        # the log may name files in any language
             self._counter += 1
             title = "Synthesis" if kind == "synth" else "Fit"
             self.log.add(f"===== {title} started {time.strftime('%H:%M:%S')} =====")
@@ -98,7 +124,10 @@ class JobManager:
             self.process = subprocess.Popen(
                 [sys.executable, "-m", "pysme_gui.worker", directory],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
-                text=True, errors="replace", start_new_session=True, cwd=directory,
+                text=True, encoding="utf-8", errors="replace", cwd=directory,
+                # A group of its own, so that it can be stopped with its helpers
+                # (Windows finds those by their parent instead).
+                start_new_session=sys.platform != "win32",
             )
             self.info = {
                 "id": self._counter, "state": "running", "kind": kind,
@@ -152,6 +181,9 @@ class JobManager:
                 except ValueError:
                     name = str(-code)
                 return f"PySME crashed ({name}). See the log for the last messages."
+            if code >= 0xC0000000:             # how Windows reports a crash
+                return (f"PySME crashed (Windows error {code:#010x}). "
+                        "See the log for the last messages.")
             return f"PySME exited with code {code}. See the log."
 
     def cancel(self):
@@ -159,25 +191,17 @@ class JobManager:
         if not self.running or process is None or process.poll() is not None:
             return
         self._cancelled = True
-        self._signal(process, signal.SIGTERM)
 
-        def force():
+        def end():
+            stop_process_tree(process)
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self._signal(process, signal.SIGKILL)
+                stop_process_tree(process, force=True)
 
-        threading.Thread(target=force, daemon=True).start()
-
-    @staticmethod
-    def _signal(process, number):
-        # The whole group, so helper processes started by PySME stop too.
-        try:
-            os.killpg(process.pid, number)
-        except (ProcessLookupError, PermissionError):
-            pass
+        threading.Thread(target=end, daemon=True).start()
 
     def shutdown(self):
         if self.process is not None and self.process.poll() is None:
             self._cancelled = True
-            self._signal(self.process, signal.SIGKILL)
+            stop_process_tree(self.process, force=True)

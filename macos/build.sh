@@ -54,7 +54,7 @@ rsync -a --exclude '__pycache__' --exclude '*.pyc' "$ROOT/pysme_gui" "$APP/Conte
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
 # 3. The native shell and its icon.
-swiftc -O -target arm64-apple-macos14.0 "$ROOT/macos/PySMEApp.swift" -o "$APP/Contents/MacOS/PySME"
+swiftc -O -target arm64-apple-macos15.0 "$ROOT/macos/PySMEApp.swift" -o "$APP/Contents/MacOS/PySME"
 swift "$ROOT/macos/make_icon.swift" "$ROOT/assets/pysme_logo-ver-light.png" "$DIST/work/PySME.iconset"
 iconutil -c icns "$DIST/work/PySME.iconset" -o "$APP/Contents/Resources/PySME.icns"
 cp "$ROOT/macos/setup.html" "$APP/Contents/Resources/setup.html"
