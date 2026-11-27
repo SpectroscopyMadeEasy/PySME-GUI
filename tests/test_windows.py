@@ -229,6 +229,20 @@ def test_the_launcher_starts_what_is_chosen(tmp_path, monkeypatch):
     assert launch.interface_command(str(home), [])[0][0] == sys.executable
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs PYTHONSAFEPATH")
+def test_the_launcher_ignores_a_copy_in_the_current_folder(tmp_path, monkeypatch):
+    launch = load_launcher()
+    home = tmp_path / "app"
+    installed(home, code="print('the installed copy')", python=sys.executable)
+    other = tmp_path / "elsewhere" / "pysme_gui"
+    other.mkdir(parents=True)
+    (other / "__init__.py").write_text("")
+    (other / "__main__.py").write_text("raise SystemExit(7)")
+    monkeypatch.chdir(other.parent)
+    # With --console the launcher stays in the folder it was started from.
+    assert launch.main(["--console"], home=str(home)) == 0
+
+
 def test_the_launcher_keeps_what_is_printed_and_reports_a_failure(tmp_path, monkeypatch):
     launch = load_launcher()
     home = tmp_path / "用户 张"

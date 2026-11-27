@@ -102,9 +102,19 @@ def synthesize(api, what):
     check(job["state"] == "done", f"{what} ({job.get('error') or job['state']})")
 
 
+def inside(path, folder):
+    path, folder = (os.path.normcase(os.path.realpath(p)) for p in (path, folder))
+    return path.startswith(folder + os.sep)
+
+
 def exercise(api, record):
     """What a user does with a running interface; ``record`` is its running.json."""
     check(api("state")["can_quit"], "the browser version can be quit from the page")
+    # It has answered, so its record is written.
+    with open(record, encoding="utf-8") as handle:
+        code = json.load(handle).get("code") or ""
+    check(bool(code) and inside(code, os.path.join(app_home(), "gui")),
+          f"the installed copy of the interface runs ({code or 'not recorded'})")
     if os.name == "posix":
         check(stat.S_IMODE(os.stat(record).st_mode) == 0o600,
               "only this user can read the record with the access token")

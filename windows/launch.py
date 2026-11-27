@@ -48,6 +48,8 @@ def interface_command(home, arguments):
         UV_PYTHON_INSTALL_DIR=os.path.join(home, "python"),
         UV_CACHE_DIR=os.path.join(home, "cache"),
         PYTHONPATH=os.path.join(home, "gui", gui_id),
+        # Without this, -m looks in the current folder before PYTHONPATH.
+        PYTHONSAFEPATH="1",
         PYTHONUTF8="1",
     )
     return [python, "-m", "pysme_gui", *arguments], env

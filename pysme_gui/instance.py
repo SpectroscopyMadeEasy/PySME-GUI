@@ -57,7 +57,9 @@ def register(url):
     temp = f"{path}.{os.getpid()}.tmp"
     handle = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        json.dump({"url": url, "pid": os.getpid()}, stream)
+        # "code" tells which copy of this program runs (read by tools/smoke.py).
+        code = os.path.dirname(os.path.abspath(__file__))
+        json.dump({"url": url, "pid": os.getpid(), "code": code}, stream)
     os.replace(temp, path)
 
 

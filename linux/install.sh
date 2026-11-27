@@ -60,7 +60,8 @@ gui=\$(sed -n 's/^gui=//p' "$DATA/current.sh")
 env=\$(sed -n 's/^env=//p' "$DATA/current.sh")
 python=\$(value python "$DATA/settings.json" || true)
 [ -n "\$python" ] || python="$DATA/envs/\$env/venv/bin/python"
-PYTHONPATH="$DATA/gui/\$gui" exec "\$python" -m pysme_gui "\$@"
+# Without PYTHONSAFEPATH, -m looks in the current folder before PYTHONPATH.
+PYTHONSAFEPATH=1 PYTHONPATH="$DATA/gui/\$gui" exec "\$python" -m pysme_gui "\$@"
 LAUNCHER
 chmod +x "$BIN/pysme-gui"
 

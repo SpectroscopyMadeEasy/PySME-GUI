@@ -384,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         process.arguments = arguments
         var env = childEnvironment()
         env["PYTHONPATH"] = paths.gui(active.gui).path
+        env["PYTHONSAFEPATH"] = "1"   // else -m looks in the current folder first
         process.environment = env
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         let pipe = Pipe()
