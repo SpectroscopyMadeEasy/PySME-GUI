@@ -58,11 +58,25 @@ jobs:
           [ -n "$url" ] || { echo "no address"; exit 1; }
           token=${url#*token=}
           state=${url%%/\?*}/api/state
-          ask() { "$@" curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "X-PySME-Token: $token" "$state" || true; }
-          mine=$(ask env)
-          theirs=$(ask sudo -u nobody)
-          echo "this user: $mine, another user: $theirs (000 = hung up without an answer)"
-          [ "$mine" = 200 ] && [ "$theirs" = 000 ]
+          [ "$(id -u nobody)" != "$(id -u)" ] || { echo "nobody is this user"; exit 1; }
+          # Prints the HTTP status and how curl ended. 000 alone would not do: it
+          # is also what a connection gives that never reached the program. curl
+          # ends with 52 or 56 when it was connected and then hung up on.
+          ask() {
+            local ended=0 status
+            status=$("$@" curl --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              -H "X-PySME-Token: $token" "$state") || ended=$?
+            echo "$status $ended"
+          }
+          before=$(ask env)
+          other=$(ask sudo -u nobody)
+          after=$(ask env)      # still there: it did not just stop listening
+          echo "this user: $before | another user: $other | this user again: $after"
+          [ "$before" = "200 0" ] && [ "$after" = "200 0" ] || { echo "this user was not answered"; exit 1; }
+          case "$other" in
+            "000 52" | "000 56") echo "the other user was connected and hung up on" ;;
+            *) echo "this does not show a refusal"; exit 1 ;;
+          esac
 
       - name: Automated tests with the installed PySME
         run: |

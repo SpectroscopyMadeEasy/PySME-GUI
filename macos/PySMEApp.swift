@@ -393,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         startGeneration += 1
         let generation = startGeneration
         serverURL = nil
+        pageReady = false
         readers = [LineReader(pipe) { [weak self] line in
             guard let self = self, generation == self.startGeneration else { return }
             self.record(line)
@@ -409,6 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard let self = self, self.server === finished else { return }
                 self.server = nil
+                self.serverURL = nil
                 self.serverStopped(custom: custom)
             }
         }
@@ -600,6 +602,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.openInPage(file) }
         }
         if let target = environment["PYSME_GUI_SELFTEST"] { runSelfTest(into: target) }
+    }
+
+    // The interface gives its address before it opens a file named at the start,
+    // and answers only afterwards. A page that gives up meanwhile is asked for
+    // again, for as long as that interface runs.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        guard webView === web, !pageReady, let url = serverURL, server?.isRunning == true,
+              (error as NSError).code != NSURLErrorCancelled
+        else { return }
+        record("The page did not load yet (\(error.localizedDescription)); asking again.")
+        let generation = startGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self = self, generation == self.startGeneration, !self.pageReady,
+                  self.serverURL == url
+            else { return }
+            self.web.load(URLRequest(url: url))
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,

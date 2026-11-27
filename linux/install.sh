@@ -20,7 +20,34 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
+# Programs are run from the app's folder. Before anything in it is used, it has
+# to be this user's own, with nobody else able to write into it. The launcher
+# gets the same check.
+CHECK_FOLDER=$(cat <<'CHECK'
+safe_folder() {
+    [ -e "$1" ] || return 0
+    if [ ! -O "$1" ]; then
+        echo "PySME-GUI runs programs from $1, which belongs to another user." >&2
+        return 1
+    fi
+    # "/." so that what a link leads to is judged. Writing by the group is let
+    # through for the user's own group (named like the user), as many Linux
+    # systems set it up.
+    if ! ls -ld "$1/." | awk -v me="$(id -un)" '{
+            exit (substr($1, 9, 1) == "w" || (substr($1, 6, 1) == "w" && $4 != me)) ? 1 : 0 }'; then
+        echo "PySME-GUI runs programs from $1, but others can write into it." >&2
+        echo "Make sure nobody has changed what is in it (or remove it), then run:" >&2
+        echo "    chmod go-w \"$1\"" >&2
+        return 1
+    fi
+}
+CHECK
+)
+eval "$CHECK_FOLDER"
+safe_folder "$DATA" || exit 1
+
 mkdir -p "$DATA/bin" "$BIN" "$APPS"
+chmod 700 "$DATA"
 UV=${PYSME_GUI_UV:-}
 [ -n "$UV" ] || UV=$(command -v uv || true)
 if [ -z "$UV" ]; then
@@ -48,6 +75,8 @@ cp "$ROOT/assets/pysme-icon.png" "$DATA/icon.png"      # stays if the download i
 
 cat > "$BIN/pysme-gui" <<LAUNCHER
 #!/bin/sh
+$CHECK_FOLDER
+safe_folder "$DATA" || exit 1
 # The menu entry has no terminal: what would be printed there goes to a file.
 if [ "\${1:-}" = "--from-menu" ]; then
     shift

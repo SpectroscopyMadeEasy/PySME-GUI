@@ -62,6 +62,10 @@ async function request(path, body) {
     throw new Error("Lost the connection to the PySME process. Restart the app.");
   }
   const data = await response.json().catch(() => ({ error: response.statusText }));
+  /* A copied address opens such a page: the token is not part of it. */
+  if (response.status === 403 && data.error === "Missing or wrong access token") {
+    throw new Error("This page is not connected to PySME. Start PySME again (from the menu or its shortcut): it opens a page that is.");
+  }
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
 }
@@ -2682,6 +2686,7 @@ async function start() {
   $("#fit-element").replaceChildren(...elements.filter((e) => e.z > 2).map((e) => h("option", { value: e.el }, e.el)));
   $("#fit-element").value = "Mg";
   renderForms(true);
+  if (!S) return;               // the message has been shown
   renderDrawer();        // the periodic table needs the list of NLTE grids
   const { notice } = await request("settings");
   if (notice) toast(notice, "error");

@@ -8,10 +8,12 @@ other users are refused altogether (see localpeer.py).
 """
 
 import argparse
+import html
 import json
 import logging
 import mimetypes
 import os
+import pathlib
 import re
 import secrets
 import signal
@@ -92,6 +94,8 @@ class Updater:
         self.log = log
         self.state = {"state": "idle"}
         self._found = None              # what the last check found
+        self._asked = self._answered = 0
+        self._check_lock = threading.Lock()
         self._tasks = 0
         self._lock = threading.Lock()
 
@@ -106,6 +110,9 @@ class Updater:
 
     def check(self):
         """Ask what has been published, and judge it."""
+        with self._check_lock:
+            self._asked += 1
+            number = self._asked
         found = {"checked": time.strftime("%H:%M"), "errors": [], "published": None,
                  "releases": None, "gui_note": None}
         try:
@@ -118,7 +125,10 @@ class Updater:
             found["releases"] = envmanager.available_pysme()
         except Exception as exc:
             found["errors"].append(f"PySME: {exc}")
-        self._found = found
+        with self._check_lock:
+            # One started earlier, perhaps for another channel, may end later.
+            if number > self._answered:
+                self._answered, self._found = number, found
         return self.latest
 
     @property
@@ -784,18 +794,32 @@ def make_handler(app):
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     check_user = False              # set where the system names a connection's user
+    note = None                     # where to say that a connection was refused
+    refused = 0
 
     def verify_request(self, request, client_address):
         # Called before the connection gets a thread or is read from.
         if not self.check_user:
             return True
-        return localpeer.is_this_user(client_address[:2], request.getsockname()[:2])
+        accepted = localpeer.is_this_user(client_address[:2], request.getsockname()[:2])
+        if not accepted:
+            self.refused += 1
+            if self.refused <= 3 and self.note:     # not one line for every try
+                self.note("Refused a connection that this system does not show as yours: "
+                          "from another account, or closed again at once.")
+        return accepted
 
 
 def create_server(port=0):
     app = App()
     server = LocalServer(("127.0.0.1", port), make_handler(app))
     server.check_user = localpeer.can_tell()
+
+    def note(text):
+        app.log.add(text)
+        print(text, flush=True)     # the log file, for a page that cannot connect
+
+    server.note = note
     if sys.platform.startswith("linux") and not server.check_user:
         app.log.add("This system does not say which user a local connection comes from; "
                     "only the access token protects the interface.")
@@ -814,9 +838,41 @@ def announce(url, wanted):
         print(f"PYSME_GUI_URL {url}", flush=True)
 
 
-def show(url):
-    """Open the interface in the web browser."""
-    if not webbrowser.open(url):
+def cannot_tell_users():
+    """True on a Linux where connections of other users cannot be refused."""
+    return sys.platform.startswith("linux") and not localpeer.can_tell()
+
+
+def _doorway_path():
+    return os.path.join(envmanager.app_home(), "open.html")
+
+
+def _doorway(url):
+    """A page only this user can read, which leads on to ``url``."""
+    path = _doorway_path()
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    if os.path.exists(path):
+        os.remove(path)                 # so that the mode below is the one it gets
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write('<!doctype html><meta charset="utf-8"><title>PySME</title>'
+                     f'<meta http-equiv="refresh" content="0;url={html.escape(url)}">'
+                     "<p>Opening PySME…</p>\n")
+    return pathlib.Path(path).as_uri()
+
+
+def show(url, through_file=False):
+    """Open the interface in the web browser.
+
+    What a browser is started with is on its command line, which others on a
+    shared computer may be able to see. Where their connections cannot be
+    refused (``through_file``), it gets a file instead of the address.
+    """
+    if through_file:
+        print("This system does not say which user connects, so the browser is given a "
+              "file that leads to the interface. If no page opens, run pysme-gui "
+              "--no-browser in a terminal and open the address it prints.", flush=True)
+    if not webbrowser.open(_doorway(url) if through_file else url):
         print("No web browser could be opened. Run pysme-gui --no-browser in a "
               "terminal to get the address.", flush=True)
 
@@ -839,7 +895,7 @@ def main(argv=None):
             announce(url, args.no_browser)
             print("PySME is already running; this shows it again.", flush=True)
             if not args.no_browser:
-                show(url)
+                show(url, cannot_tell_users())
             return
 
     if envmanager.is_within(os.path.dirname(os.path.abspath(__file__)), envmanager.app_home()):
@@ -882,7 +938,7 @@ def main(argv=None):
         instance.register(url)
         print("To quit: ⋯ → Quit PySME in the window, or Ctrl-C here.", flush=True)
         if not args.no_browser:
-            show(url)
+            show(url, cannot_tell_users())
     try:
         server.serve_forever()
     finally:

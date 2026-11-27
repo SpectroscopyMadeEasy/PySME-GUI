@@ -88,7 +88,9 @@ def get_state(app, httpd):
     connection = http.client.HTTPConnection(*httpd.server_address, timeout=60)
     try:
         connection.request("GET", "/api/state", headers={"X-PySME-Token": app.token})
-        return connection.getresponse().status
+        response = connection.getresponse()
+        response.read()                 # hanging up mid-answer would trip the server
+        return response.status
     finally:
         connection.close()
 
@@ -192,7 +194,10 @@ def test_a_report_without_settings_leaves_out_the_values_being_fitted(running):
 
 
 @pytest.mark.parametrize("smelib, shown", [
-    ("SME Library version: 6.13.23, darwin [SMElib ref: v6.13.23]", "SMElib: 6.13.23"),
+    ("SME Library version: 6.13.23, darwin [SMElib ref: v6.13.23]", "SMElib: 6.13.23\n"),
+    # A development build must not pass for the release it comes after.
+    ("SME Library version: 6.13.23-4-g1a2b3c4-dirty, linux [SMElib ref: x]",
+     "SMElib: 6.13.23-4-g1a2b3c4-dirty\n"),
     ("not loadable: /Users/somebody/secret/libsme.so: no such file", "SMElib: unknown"),
     ("unavailable (OSError: C:\\Users\\somebody\\x)", "SMElib: unknown"),
 ])
@@ -214,3 +219,42 @@ def test_a_saved_report_is_for_this_user_alone(tmp_path, monkeypatch):
     finally:
         os.umask(previous)
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_a_refused_connection_leaves_a_trace_but_not_one_per_try(running, monkeypatch):
+    app, httpd = running
+    httpd.check_user = True
+    monkeypatch.setattr(localpeer, "is_this_user", lambda client, server: False)
+    for _ in range(6):
+        with pytest.raises((http.client.HTTPException, OSError)):
+            get_state(app, httpd)
+    lines = [line for line in app.log.since(0)["lines"] if "Refused a connection" in line]
+    assert len(lines) == 3 and app.token not in "".join(lines)
+
+
+@pytest.mark.parametrize("platform, tells, through_file", [
+    ("linux", True, False), ("linux", False, True), ("darwin", False, False), ("win32", False, False),
+])
+def test_when_the_browser_is_given_a_file(monkeypatch, platform, tells, through_file):
+    monkeypatch.setattr(server_module.sys, "platform", platform)
+    monkeypatch.setattr(localpeer, "can_tell", lambda: tells)
+    assert server_module.cannot_tell_users() is through_file
+
+
+@pytest.mark.parametrize("through_file", [False, True])
+def test_the_token_is_not_on_the_browsers_command_line_where_it_matters(
+        tmp_path, monkeypatch, through_file):
+    monkeypatch.setenv("PYSME_GUI_HOME", str(tmp_path / "an app folder"))
+    opened = []
+    monkeypatch.setattr(server_module.webbrowser, "open", lambda target: opened.append(target) or True)
+    url = "http://127.0.0.1:1234/?token=SECRET_abc-123"
+    for _ in range(2):                      # opening it again writes it anew
+        server_module.show(url, through_file)
+    if not through_file:
+        assert opened == [url, url]
+        return
+    assert all(t.startswith("file://") and "SECRET" not in t for t in opened)
+    page = tmp_path / "an app folder" / "open.html"
+    assert url in page.read_text(encoding="utf-8")
+    if os.name == "posix":
+        assert stat.S_IMODE(page.stat().st_mode) == 0o600

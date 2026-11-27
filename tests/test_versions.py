@@ -498,3 +498,28 @@ def test_a_late_look_at_an_earlier_result_leaves_the_new_one_marked(home, monkey
     assert updater.state["seen"] is False
     updater.seen(ids[1])
     assert updater.state["seen"] is True
+
+
+def test_a_check_that_started_earlier_and_ends_later_does_not_win(home, monkeypatch):
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    slow, started, asked = threading.Event(), threading.Event(), []
+
+    def latest_gui():
+        asked.append(1)
+        version = "9.0.0" if len(asked) == 1 else "1.1.0"
+        if len(asked) == 1:                       # for the channel chosen before
+            started.set()
+            slow.wait(30)
+        return envmanager.read_constants(
+            f'__version__ = "{version}"\nPYSME_MINIMUM = "1.2.0"\nPYSME_BELOW = "2.0"\n')
+
+    monkeypatch.setattr(envmanager, "latest_gui", latest_gui)
+    monkeypatch.setattr(envmanager, "available_pysme", lambda: [])
+    updater = Updater(LogBuffer())
+    earlier = threading.Thread(target=updater.check)
+    earlier.start()
+    assert started.wait(30)
+    assert updater.check()["gui"] == "1.1.0"
+    slow.set()
+    earlier.join(30)
+    assert updater.latest["gui"] == "1.1.0"

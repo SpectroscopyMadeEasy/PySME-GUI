@@ -212,7 +212,8 @@ def _version_only(name, value):
     program is broken, what stands there is an error message, maybe with paths."""
     value = str(value)
     if name == "SMElib":                    # "SME Library version: 6.13.23, darwin [...]"
-        found = re.search(r"version:?\s*(\d+(?:\.\d+)+)", value)
+        # All of it: a development build reads like 6.13.23-4-g1a2b3c4-dirty.
+        found = re.search(r"version:?\s*(\d+(?:\.\d+)+[0-9A-Za-z.+\-]*)", value)
         value = found.group(1) if found else value
     return value if re.fullmatch(r"\d+(\.\d+)+[0-9A-Za-z.+\-]*", value) else "unknown"
 
