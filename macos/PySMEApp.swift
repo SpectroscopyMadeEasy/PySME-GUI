@@ -868,7 +868,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     @objc func showAbout(_ sender: Any?) {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: bundleVersion, .version: ""])
+        let plain = {
+            NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: self.bundleVersion, .version: ""])
+        }
+        // The interface's own page says who made it. The plain panel stands in
+        // while there is no page, or with an older interface that has none.
+        guard pageReady else { return plain() }
+        web.evaluateJavaScript("typeof window.guiCommand === 'function' && window.guiCommand('about') === true") { value, _ in
+            if (value as? Bool) != true { plain() }
+        }
     }
 
     @objc func command(_ sender: NSMenuItem) {

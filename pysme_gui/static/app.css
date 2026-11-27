@@ -139,6 +139,8 @@ fieldset:disabled { opacity: 0.6; }
    letters above the button labels; 2.5px down centres the capitals instead. */
 .brand { display: flex; align-items: center; gap: 7px; }
 .brand img { display: block; height: 21px; position: relative; top: 2.5px; }
+/* It opens "About PySME" and looks like the lettering it holds. */
+.brand .wordmark { border: 0; background: none; padding: 0; margin: 0; cursor: pointer; display: flex; }
 button.stage-badge { height: 17px; padding: 0 7px; border: 1px solid var(--synth); border-radius: 9px; background: transparent; color: var(--synth); font-size: 10.5px; font-weight: 600; line-height: 15px; }
 .brand .on-dark { display: none; }
 @media (prefers-color-scheme: dark) {

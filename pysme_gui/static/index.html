@@ -10,8 +10,10 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="on-light" src="wordmark-on-light.png" alt="PySME">
-      <img class="on-dark" src="wordmark-on-dark.png" alt="PySME">
+      <button type="button" class="wordmark" data-cmd="about" aria-haspopup="dialog" title="About PySME">
+        <img class="on-light" src="wordmark-on-light.png" alt="PySME">
+        <img class="on-dark" src="wordmark-on-dark.png" alt="PySME">
+      </button>
       <!-- filled in from the version; a final release shows none -->
       <button type="button" id="stage-badge" class="stage-badge" aria-haspopup="dialog" hidden></button>
     </div>
@@ -29,6 +31,7 @@
           <button data-cmd="exportPng">Export plot as PNG…</button>
           <button data-cmd="example">Load solar example</button>
           <button data-cmd="report">Report a problem…</button>
+          <button data-cmd="about">About PySME</button>
           <button data-cmd="quit" id="btn-quit" hidden>Quit PySME</button>
         </div>
       </div>

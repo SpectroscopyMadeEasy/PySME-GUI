@@ -2062,6 +2062,20 @@ function showStage() {
       h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, "Close")]);
 }
 
+/* Who made this, and what it stands on. */
+function showAbout() {
+  const repository = h("a", { href: "https://github.com/SpectroscopyMadeEasy/PySME-GUI", target: "_blank", rel: "noopener noreferrer" }, "Source code");
+  const dialog = openDialog("About PySME",
+    h("div", { class: "about" },
+      h("p", {}, h("b", {}, `PySME-GUI ${S.release.version}`), h("br"), "A graphical interface for PySME (Spectroscopy Made Easy)."),
+      h("p", {}, "Developed by ", h("b", {}, "Mingjie Jian"), "."),
+      h("p", {}, "The original PySME-GUI was written by Ansgar Wehrhahn; this rewrite follows its design."),
+      h("p", {}, "PySME is built on SME by Jeff Valenti and Nikolai Piskunov. If you publish results, please cite the papers listed in the Citations tab."),
+      h("p", { class: "hint" }, "Much of the code of this interface was written with Claude Code (Anthropic)."),
+      h("p", { class: "hint" }, repository, " · MIT License")),
+    [h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, "Close")]);
+}
+
 /* ---------------------------------------------------------- problem reports */
 
 /* Three steps: describe, check what will be shared, then save and mail it. */
@@ -2247,6 +2261,7 @@ const commands = {
   },
   settings() { showSettings().catch((e) => toast(e.message, "error")); },
   report() { showReport(); },
+  about() { showAbout(); },
   themeAuto() { applyTheme("auto"); },
   themeLight() { applyTheme("light"); },
   themeDark() { applyTheme("dark"); },
@@ -2267,9 +2282,10 @@ function resetView() {
 
 /* Entry points used by the Mac app's menu bar. */
 window.guiCommand = (name) => {
-  if (!S || !commands[name]) return;
-  if (jobRunning() && name !== "stop" && name !== "settings") return;
+  if (!S || !commands[name]) return false;      // the Mac app then does without
+  if (jobRunning() && !["stop", "settings", "about"].includes(name)) return true;
   commands[name]();
+  return true;
 };
 window.openFromFinder = (path) => commands.open(path);
 window.hasUnsavedChanges = () => Boolean(S && S.dirty);
@@ -2670,6 +2686,7 @@ async function start() {
   applyTheme(currentTheme(), false);
   wire();
   await refresh();
+  if (!S) return;               // the message has been shown
   try {
     options = await request("options");
   } catch (error) {
@@ -2686,7 +2703,6 @@ async function start() {
   $("#fit-element").replaceChildren(...elements.filter((e) => e.z > 2).map((e) => h("option", { value: e.el }, e.el)));
   $("#fit-element").value = "Mg";
   renderForms(true);
-  if (!S) return;               // the message has been shown
   renderDrawer();        // the periodic table needs the list of NLTE grids
   const { notice } = await request("settings");
   if (notice) toast(notice, "error");
