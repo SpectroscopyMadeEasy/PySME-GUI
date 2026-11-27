@@ -385,7 +385,7 @@ def test_the_interface_says_why_and_keeps_what_it_had(hostile):
     changed, marker = hostile
     session = Session()
     before = session.sme
-    with pytest.raises(UserError, match="This file was not loaded"):
+    with pytest.raises(UserError, match="can run programs"):
         session.open_path(changed)
     assert session.sme is before and not marker.exists()
 
