@@ -275,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         record("--- start \(Date()) build \(bundleID) ---")
 
         guard let active = activeSelection() else {
-            install("Setting up PySME", "This downloads Python and PySME (about 120 MB). It happens only once.")
+            install("Setting up PySME", "")       // the steps say what is happening
             return
         }
         // A newer app dragged into Applications brings a newer interface with it.
