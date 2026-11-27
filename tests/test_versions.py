@@ -5,12 +5,13 @@ import os
 import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
-from pysme_gui import envmanager
+from pysme_gui import envmanager, server
 from pysme_gui.server import Updater, create_server
 from pysme_gui.jobs import LogBuffer
 
@@ -141,6 +142,68 @@ def test_installing_a_version_does_not_switch_and_nothing_is_pruned(home):
         envmanager.install_pysme("1.3.0", log=quiet)
     with pytest.raises(RuntimeError, match="needs PySME"):
         envmanager.install_pysme("1.1.1", log=quiet)
+
+
+def test_going_back_is_offered_only_towards_an_older_interface(home, monkeypatch):
+    monkeypatch.setattr(server, "is_managed", lambda: True)
+    updater = Updater(LogBuffer())
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    envmanager.setup(home.source("1.1.0"), log=quiet)          # an update
+    info = updater.info()
+    assert (info["previous_gui"], info["left_gui"]) == ("1.0.0", None)
+
+    envmanager.rollback_gui(log=quiet)
+    info = updater.info()
+    # The one left behind is newer: it comes back through the update only.
+    assert (info["previous_gui"], info["left_gui"]) == (None, "1.1.0")
+
+
+def test_the_mac_apps_own_way_back_is_noticed_too(home, monkeypatch):
+    monkeypatch.setattr(server, "is_managed", lambda: True)
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    envmanager.setup(home.source("1.1.0"), log=quiet)
+    record = envmanager.current_record()                       # as PySMEApp.swift does
+    record["current"], record["previous"] = record["previous"], record["current"]
+    envmanager._write_record(record)
+    info = Updater(LogBuffer()).info()
+    assert (info["previous_gui"], info["left_gui"]) == (None, "1.1.0")
+
+
+def test_a_restart_is_needed_only_until_what_is_chosen_runs(home, monkeypatch):
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    gui_id, env_id = envmanager.selection()
+    # This process, as if it ran the chosen interface in the chosen environment.
+    monkeypatch.setattr(sys, "prefix", os.path.join(envmanager.env_dir(env_id), "venv"))
+    monkeypatch.setattr(server, "__file__",
+                        os.path.join(envmanager.gui_package(gui_id), "server.py"))
+    assert not Updater.restart_needed()
+    envmanager.use_env(envmanager.install_pysme("1.3.0", log=quiet), log=quiet)
+    assert Updater.restart_needed()
+    envmanager.use_env(env_id, log=quiet)
+    assert not Updater.restart_needed()
+    envmanager.setup(home.source("1.1.0"), log=quiet)
+    assert Updater.restart_needed()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_result_is_marked_until_it_has_been_looked_at(home, monkeypatch, fails):
+    monkeypatch.setattr(server, "is_managed", lambda: True)
+    updater = Updater(LogBuffer())
+    updater.seen()                                             # nothing to look at yet
+    assert updater.state == {"state": "idle"}
+
+    def action(log):
+        if fails:
+            raise RuntimeError("no network")
+
+    updater._start("Installing", action, "Installed.", restarts=True)
+    deadline = time.time() + 30
+    while updater.state["state"] == "running" and time.time() < deadline:
+        time.sleep(0.01)
+    assert updater.state["state"] == ("failed" if fails else "done")
+    assert updater.state["seen"] is False
+    updater.seen()
+    assert updater.state["seen"] is True
 
 
 def test_removing_versions(home):

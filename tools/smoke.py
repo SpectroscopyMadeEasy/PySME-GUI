@@ -148,6 +148,10 @@ def attach():
         not_overdue(deadline, "and ends, leaving no record behind")
         time.sleep(1)
     check(True, "and ends, leaving no record behind")
+    log = os.path.join(app_home(), "pysme-gui.log")
+    if os.path.exists(log):
+        with open(log, encoding="utf-8", errors="replace") as handle:
+            check("token=" not in handle.read(), "its log does not hold the access token")
 
 
 def main():

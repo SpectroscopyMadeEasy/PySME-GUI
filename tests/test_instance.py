@@ -3,7 +3,11 @@
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
+import time
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -11,6 +15,8 @@ from pysme_gui import instance
 from pysme_gui.server import create_server
 
 from test_server_and_env import request
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @pytest.fixture
@@ -73,3 +79,31 @@ def test_a_running_interface_is_found_and_a_gone_one_is_not(home, served):
     assert instance.running() == url
     instance.unregister(url)
     assert not record.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a stand-in browser command")
+def test_a_start_from_the_menu_leaves_no_token_in_its_log(tmp_path):
+    home, log = tmp_path / "home", tmp_path / "pysme-gui.log"
+    env = dict(os.environ, PYSME_GUI_HOME=str(home), PYTHONPATH=REPO,
+               BROWSER="true",                      # "opens" and shows nothing
+               PYTHONDONTWRITEBYTECODE="1")
+    with open(log, "wb") as output:                 # as the menu entry does
+        process = subprocess.Popen([sys.executable, "-m", "pysme_gui"], env=env,
+                                   cwd=str(tmp_path), stdout=output,
+                                   stderr=subprocess.STDOUT)
+    try:
+        record = home / "running.json"
+        deadline = time.time() + 60
+        while not record.exists() and time.time() < deadline and process.poll() is None:
+            time.sleep(0.1)
+        url = urlsplit(json.loads(record.read_text())["url"])
+        token = parse_qs(url.query)["token"][0]
+        base = f"{url.scheme}://{url.netloc}"
+        assert request(base, "/api/quit", token=token, body={})[0] == 200
+        assert process.wait(30) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+    text = log.read_text()
+    assert "To quit" in text                        # it did write there
+    assert token not in text and "token=" not in text

@@ -179,8 +179,10 @@ function renderTop() {
   const badge = $("#stage-badge");
   badge.hidden = S.release.stage === "stable";
   badge.textContent = S.release.stage;           // "alpha" or "beta"
-  const latest = S.update.latest;
-  $("#update-dot").hidden = !(latest && (latest.pysme_new || latest.gui_newer));
+  /* The dot: something newer, a result not looked at yet, or a restart to come. */
+  const { latest, task, restart } = S.update;
+  const unseen = (task.state === "done" || task.state === "failed") && !task.seen;
+  $("#update-dot").hidden = !(restart || unseen || (latest && (latest.pysme_new || latest.gui_newer)));
 }
 
 /* The settings dialog is rebuilt while something installs. Starting the turn
@@ -1800,10 +1802,13 @@ async function showSettings(info) {
 
   if (info.notice) body.append(h("div", { class: "card" }, info.notice));
   if (busy) body.append(h("div", { class: "card" }, spinner(), `${task.title}: ${task.step}. You can keep working.`));
-  if (task.state === "done") body.append(h("div", { class: "card" }, task.message));
+  /* What a restart will apply is said in one box with the restart itself. */
+  const restartResult = info.restart && task.state === "done" && task.restarts;
+  if (task.state === "done" && !restartResult) body.append(h("div", { class: "card" }, task.message));
   if (task.state === "failed") body.append(h("p", { style: "color:var(--err);white-space:pre-wrap" }, `${task.title} failed. Nothing was changed.\n${task.error}`));
   if (info.restart) {
-    body.append(h("div", { class: "card" }, h("b", {}, "Restart to apply the change. "),
+    body.append(h("div", { class: "card" }, restartResult ? h("div", {}, task.message) : "",
+      h("b", {}, "Restart to apply the change. "),
       NATIVE ? h("button", { class: "secondary", onclick: restartApp }, "Restart now") : h("span", {}, "Quit PySME (⋯ → Quit PySME) and start it again.")));
   }
 
@@ -1814,13 +1819,17 @@ async function showSettings(info) {
   if (info.managed) {
     gui.append(h("button", { class: "primary", disabled: busy || !newGui || Boolean(latest.gui_blocked), onclick: () => run("update/gui", {}) }, "Update interface"));
     if (info.previous_gui) {
-      gui.append(h("button", { disabled: busy, onclick: () => run("update/rollback", {}) }, `Back to previous interface (${info.previous_gui})`));
+      gui.append(h("button", { disabled: busy, onclick: () => run("update/rollback", {}) }, `Go back to ${info.previous_gui}`));
     }
   }
   gui.append(h("button", { onclick: () => showReport() }, "Report a problem…"));
   body.append(
     h("h3", {}, "Interface"),
-    h("p", {}, `PySME-GUI ${info.gui}`, newGui ? h("b", {}, `  → ${latest.gui} available`) : latest && latest.gui ? "  (up to date)" : ""),
+    h("p", {}, `PySME-GUI ${info.gui}`,
+      newGui ? h("b", {}, `  → ${latest.gui} available`)
+        : info.gui_selected !== info.gui ? h("b", {}, `  → ${info.gui_selected} after restart`)
+          : latest && latest.gui ? "  (up to date)" : ""),
+    newGui && latest.gui === info.left_gui ? h("p", { class: "hint" }, `You went back from ${info.left_gui}.`) : "",
     gui,
     channelRow(info, busy, run),
     latest && latest.gui_note ? h("p", { class: "hint" }, latest.gui_note) : "",
@@ -1848,6 +1857,10 @@ async function showSettings(info) {
       h("span", {}, "Python"), h("span", {}, `${info.python_version} — ${info.python}`),
       h("span", {}, "App data"), h("span", {}, info.home),
       h("span", {}, "Model data"), h("span", {}, "~/.sme (shared by all PySME versions)")));
+
+  if ((task.state === "done" || task.state === "failed") && !task.seen) {
+    request("update/seen", {}).then(refresh).catch(() => {});
+  }
 
   const previous = $("#dialog .dialog-body");
   if (previous && $("#dialog .settings-body")) settingsScroll = previous.scrollTop;
@@ -1972,7 +1985,7 @@ function versionRow(env, info, busy, run) {
       disabled: busy,
       onclick: async () => {
         const yes = await confirmDialog(`Remove PySME ${env.pysme_version}?`,
-          "Scripts that use its Python will stop working. Installing the version again may bring newer versions of the other packages; save the package list first if you need exactly the same.", "Remove");
+          `Scripts that use its Python will stop working. You can install PySME ${env.pysme_version} again later, but the other packages it uses may then be newer. To keep a record of the exact versions, save the package list first. The app cannot install from that list; use it to set up your own Python.`, "Remove");
         if (yes) await run("pysme/remove", { id: env.id });
         else await showSettings();
       },
@@ -2050,7 +2063,7 @@ function showReport(draft = { description: "", settings: false }) {
     },
   }, "Create report");
   openDialog("Report a problem", h("div", { class: "report" },
-    h("p", {}, "This makes one text file with the program versions, your system and the recent log, which you can send by email or attach to a GitHub issue. Nothing is sent automatically."),
+    h("p", {}, "This makes one text file with the program versions, your system and the recent log, which you can attach to a GitHub issue or pass on yourself. Nothing is sent automatically."),
     description,
     h("label", { class: "check" }, include, " Also include my current settings (stellar parameters, wavelength ranges, fit values)"),
     h("p", { class: "hint" }, "Spectra and line lists are never included. You can read and edit the report in the next step.")),
@@ -2085,14 +2098,9 @@ async function copyText(text) {
   }
 }
 
-/* A web page cannot attach a file to an email; the Mac app can, if a mail
-   program is set up. So the manual way is always shown as well. */
+/* A report goes into a GitHub issue, or is passed on by hand. The program holds
+   no e-mail address and sends nothing itself. */
 function sendReport(saved) {
-  const writeEmail = () => {
-    if (NATIVE) return toNative({ type: "mailReport", path: saved.path, to: saved.email, subject: saved.subject, body: saved.body });
-    const query = `subject=${encodeURIComponent(saved.subject)}&body=${encodeURIComponent(saved.body)}`;
-    h("a", { href: `mailto:${encodeURIComponent(saved.email).replace("%40", "@")}?${query}`, target: "_blank" }).click();
-  };
   const openIssue = () => {
     const link = h("a", { href: saved.issue_url, rel: "noopener" });
     // The Mac app hands web links to the system browser; elsewhere use a new tab.
@@ -2108,23 +2116,15 @@ function sendReport(saved) {
     h("div", { class: "kv" }, row("File", saved.path)),
     h("div", { class: "send-ways" },
       h("div", { class: "send-way" },
-        h("h3", {}, "Email"),
-        h("p", {}, NATIVE
-          ? "Opens your mail program with the file attached. If nothing opens, or you use webmail, write the email yourself and attach the file."
-          : "Opens your mail program. Please attach the file yourself. With webmail, write the email there."),
-        saved.email
-          ? h("div", { class: "kv" }, row("Send to", saved.email), row("Subject", saved.subject))
-          : h("p", { class: "hint" }, "No report address is set in this version. Send the file to the person who gave you the program."),
-        h("button", { class: "secondary", onclick: writeEmail }, "Write email")),
-      h("div", { class: "send-way" },
         h("h3", {}, "GitHub issue"),
         h("p", {}, "Needs a GitHub account and access to github.com. A new issue opens in your browser: drag the file into it."),
         h("p", { class: "hint" }, "Issues are public: anyone can read the attached file."),
-        h("button", { class: "secondary", onclick: openIssue }, "Open GitHub issue")))),
-    [
-      h("button", { onclick: () => request("report/reveal", {}).catch((e) => toast(e.message, "error")) }, "Show file"),
-      h("button", { onclick: () => $("#dialog").close() }, "Done"),
-    ]);
+        h("button", { class: "secondary", onclick: openIssue }, "Open GitHub issue")),
+      h("div", { class: "send-way" },
+        h("h3", {}, "Without GitHub"),
+        h("p", {}, "Give the file to the person who gave you the program, in whatever way you usually reach them."),
+        h("button", { class: "secondary", onclick: () => request("report/reveal", {}).catch((e) => toast(e.message, "error")) }, "Show file")))),
+    [h("button", { onclick: () => $("#dialog").close() }, "Done")]);
 }
 
 /* ----------------------------------------------------------------- commands */

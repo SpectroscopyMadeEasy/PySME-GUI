@@ -51,6 +51,8 @@ cat > "$BIN/pysme-gui" <<LAUNCHER
 # The menu entry has no terminal: what would be printed there goes to a file.
 if [ "\${1:-}" = "--from-menu" ]; then
     shift
+    # Only this user may read the log; it names files and folders.
+    ( umask 077; : >> "$DATA/pysme-gui.log" ) && chmod 600 "$DATA/pysme-gui.log"
     exec >> "$DATA/pysme-gui.log" 2>&1
 fi
 export PYSME_GUI_HOME="$DATA" PYSME_GUI_UV="$UV"

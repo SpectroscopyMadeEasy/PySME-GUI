@@ -142,13 +142,16 @@ Things worth knowing when reading results:
 ## Updates and PySME versions
 
 The interface and PySME are versioned and updated separately, in *Updates &
-settings*. Updates are checked quietly at start-up (a dot marks the button);
-nothing is installed or switched on its own.
+settings*. Updates are checked quietly at start-up; nothing is installed or
+switched on its own. A dot marks the button when something newer is available,
+when an installation or update has finished and you have not looked yet, and
+while a change waits for a restart.
 
 **Interface.** *Update interface* installs the newest release tag in your update
 channel (release only, which is the default, or release + beta) and checks that it starts with
 your current PySME; your PySME version is not changed. If the new interface does not support that version, it says so and
-changes nothing. *Back to previous interface* undoes it.
+changes nothing. *Go back to …* undoes it; the button is shown only when the
+interface used before is an older one.
 
 **PySME.** Several versions can be installed side by side. *Install* adds one
 from PyPI (on Windows, from PySME's releases on GitHub) without switching to it; *Use* switches (after a restart); *Remove*
@@ -197,16 +200,15 @@ the app's own PySME* undoes it.
 *Report a problem…* (in *Updates & settings*, the ⋯ menu, the *Help* menu on
 macOS, and next to error messages) writes one text file with the program
 versions, system information and recent log. You read and can edit it before it
-is saved to *Downloads*; then you send it by email, or attach it to a GitHub
-issue (public; needs a GitHub account, and issues must be enabled in
+is saved to *Downloads*; then you attach it to a GitHub issue (public; needs a GitHub account, and issues must be enabled in
 `ISSUE_REPO`). Nothing is sent automatically. Spectra and line lists are never included; stellar
 parameters and fit values only if you tick the box. User names in paths are
 removed, but file and star names in the log may remain, so check the text.
 
-The macOS app tries to start an email with the file attached. This needs a mail
-program that accepts attachments; with webmail, attach the file yourself. If
-setup fails or PySME does not start, the macOS error message has the same button
-and writes a shorter report.
+If you cannot use GitHub, give the file to the person who gave you the program.
+The program holds no e-mail address and sends nothing itself. If setup fails or
+PySME does not start, the macOS error message has the same button and writes a
+shorter report.
 
 ## Where things live
 
@@ -242,9 +244,6 @@ writes `report.json` and `window.png` there, and quits. Add
 
 **Releasing.** Version stages, update channels and the steps for a release are
 in [RELEASING.md](RELEASING.md).
-
-Set `FEEDBACK_EMAIL` in `pysme_gui/__init__.py` to the address that should receive problem
-reports, then rebuild the disk image.
 
 This interface (0.3 and later) replaces the earlier Electron program, which
 remains in the history of `master`. The example line list `pysme_gui/examples/sun.lin` is the VALD

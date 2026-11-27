@@ -17,8 +17,6 @@ PYSME_RECOMMENDED = "1.3.0rc2"
 PYSME_MINIMUM = "1.2.0"
 PYSME_BELOW = "2.0"
 
-# Address for problem reports. While empty, users are told to send the file to
-# whoever gave them the program. macos/build.sh also reads this line.
-FEEDBACK_EMAIL = ""
-# GitHub repository for reports from users who have access to GitHub.
+# GitHub repository in which "Report a problem" opens an issue. The program holds
+# no e-mail address. macos/build.sh also reads this line.
 ISSUE_REPO = "SpectroscopyMadeEasy/PySME-GUI"

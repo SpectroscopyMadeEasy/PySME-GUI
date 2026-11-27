@@ -40,13 +40,14 @@ place is added). The Windows version has so far run only on GitHub's machines.
 
 - The features of 0.3.0 are fixed, and present on every supported platform.
 - The main flows work on a maintainer's Mac: open and save, import an
-  observation, synthesize, fit, NLTE, switch PySME versions, mail a report with
-  its attachment.
+  observation, synthesize, fit, NLTE, switch PySME versions, save a problem
+  report and open a GitHub issue with it.
 - One real update from one alpha tag to the next works, and so does going back.
 - With the same settings, the interface gives the same result as a PySME script.
 - A from-scratch install into an empty app folder works
   (`PYSME_GUI_SELFTEST` with an empty `PYSME_GUI_HOME`).
-- The report address and a download place the testers can reach are set.
+- Testers know how to report problems (a GitHub issue, or the person who
+  invited them) and have a download place they can reach.
 - The automated tests and a from-scratch install pass on GitHub's own Linux and
   Windows machines, so that testers do not meet failures that could have been
   found without them.

@@ -23,7 +23,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import FEEDBACK_EMAIL, ISSUE_REPO, __version__, envmanager, instance, report
+from . import ISSUE_REPO, __version__, envmanager, instance, report
 from .envmanager import is_within
 from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
@@ -154,23 +154,41 @@ class Updater:
             for info in envmanager.installed_envs()
         ]
 
+    @staticmethod
+    def restart_needed():
+        """True when what is chosen now is not what is running."""
+        custom = envmanager.settings().get("python")
+        if custom:
+            return not same_program(sys.executable, custom)
+        gui_id, env_id = envmanager.selection()
+        if not is_managed():
+            # The user has just gone back to the app's own PySME.
+            return bool(envmanager.env_info(env_id))
+        if not gui_id:
+            return False
+        if envmanager.env_info(env_id) and not is_within(sys.prefix, envmanager.env_dir(env_id)):
+            return True
+        return not is_within(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
+
+    def seen(self):
+        """The user has looked at the result of the last installation or update."""
+        if self.state.get("state") in ("done", "failed"):
+            self.state["seen"] = True
+
     def info(self):
         managed = is_managed()
         constants = self.constants()
         record = envmanager.current_record() if managed else {}
         environments = self._environments(constants) if managed else []
         previous = envmanager.gui_info(record.get("previous_gui"))
-        gui_id = envmanager.selection(record)[0]
-        restart = managed and bool(gui_id) and (
-            any(e["selected"] and not e["running"] for e in environments)
-            or not is_within(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
-        )
+        # The Mac app's own "go back" leaves the newer one only in "previous".
+        swapped = envmanager.gui_info((record.get("previous") or {}).get("gui"))
+        chosen = envmanager.version_key(constants["version"])
+        older = previous and envmanager.version_key(previous["version"]) < chosen
+        left = [g["version"] for g in (previous, swapped)
+                if g and envmanager.version_key(g["version"]) > chosen]
         custom = envmanager.settings().get("python")
         custom_pysme = envmanager.settings().get("python_pysme")
-        if custom:
-            restart = not same_program(sys.executable, custom)
-        elif not managed and envmanager.env_info(envmanager.selection()[1]):
-            restart = True          # the user has just gone back to the app's own PySME
         return {
             "gui": __version__,
             "gui_selected": constants["version"],
@@ -188,16 +206,15 @@ class Updater:
             "source": os.environ.get(envmanager.SOURCE_ENV)
             or f"release tags of {envmanager.update_repository()}",
             "channel": envmanager.channel(),
-            # A reinstall of the same release is not worth offering to go back to.
-            "previous_gui": (
-                previous["version"]
-                if previous and previous["version"] != constants["version"] else None
-            ),
+            # Offered only as a way back: a newer one comes through the update.
+            "previous_gui": previous["version"] if older else None,
+            # The newer release the user has gone back from.
+            "left_gui": max(left, key=envmanager.version_key) if left else None,
             "environments": environments,
             "recommended": constants["recommended"],
             "supported": envmanager.supported_text(constants),
             "minimum": constants["minimum"],
-            "restart": restart,
+            "restart": self.restart_needed(),
             "notice": record.get("notice"),
             "latest": self.latest,
             "task": self.state,
@@ -215,7 +232,9 @@ class Updater:
         if self.state.get("state") == "running":
             raise UserError("Wait for the running installation or update to finish.")
 
-    def _start(self, title, action, done):
+    def _start(self, title, action, done, restarts=False):
+        """Run ``action`` in the background. ``restarts`` says that its result
+        takes effect only after a restart."""
         self._require_managed()
         with self._lock:
             self._require_idle()
@@ -229,10 +248,12 @@ class Updater:
 
             try:
                 action(log)
-                self.state = {"state": "done", "message": done}
+                self.state = {"state": "done", "message": done, "restarts": restarts,
+                              "seen": False}
             except Exception as exc:
                 log(f"failed: {exc}")
-                self.state = {"state": "failed", "title": title, "error": str(exc)}
+                self.state = {"state": "failed", "title": title, "error": str(exc),
+                              "seen": False}
             if self.latest:
                 have = [i["pysme_version"] for i in envmanager.installed_envs()]
                 if self.latest.get("pysme_new") in have:
@@ -254,7 +275,7 @@ class Updater:
             self.latest["gui_newer"] = False
 
         self._start("Updating the interface", action,
-                    "Interface updated. PySME is unchanged.")
+                    "Interface updated. PySME is unchanged.", restarts=True)
 
     def set_channel(self, name):
         with self._lock:
@@ -267,9 +288,9 @@ class Updater:
         self.check()
 
     def rollback_gui(self):
-        self._start("Going back to the previous interface",
+        self._start("Going back to the earlier interface",
                     lambda log: envmanager.rollback_gui(log=log),
-                    "Went back to the previous interface. PySME is unchanged.")
+                    "Went back to the earlier interface. PySME is unchanged.", restarts=True)
 
     def install_pysme(self, version):
         version = str(version or "").strip()
@@ -282,7 +303,7 @@ class Updater:
     def use(self, env_id):
         self._start("Switching PySME",
                     lambda log: envmanager.use_env(str(env_id), log=log),
-                    "Switched. It takes effect after a restart.")
+                    "PySME switched.", restarts=True)
 
     def _known(self, env_id):
         if not any(i["id"] == env_id for i in envmanager.installed_envs()):
@@ -471,11 +492,7 @@ class App:
         subject = f"PySME-GUI problem report (GUI {__version__}, {report.system_name()})"
         return {
             "path": self.report_path,
-            "email": FEEDBACK_EMAIL,
-            "subject": subject,
             "issue_url": report.issue_url(ISSUE_REPO, subject, name, smelib_version()),
-            "body": f"My problem report is in the file {name}.\n"
-                    "(If it is not attached yet, please attach it before sending.)\n",
         }
 
     def state(self):
@@ -483,7 +500,8 @@ class App:
             state = self.session.state()
         state["job"] = self.jobs.status()
         state["log_seq"] = self.log.seq
-        state["update"] = {"task": self.updater.state, "latest": self.updater.latest}
+        state["update"] = {"task": self.updater.state, "latest": self.updater.latest,
+                           "restart": self.updater.restart_needed()}
         state["release"] = {"version": __version__, "stage": envmanager.stage(__version__)}
         state["can_quit"] = self.on_quit is not None
         return state
@@ -539,6 +557,9 @@ class App:
             return {"quitting": True}
         if route == "cancel":
             self.jobs.cancel()
+            return self.state()
+        if route == "update/seen":
+            self.updater.seen()
             return self.state()
         if route == "update/check":
             self.updater.check()
@@ -737,6 +758,24 @@ def create_server(port=0):
     return app, server, url
 
 
+def announce(url, wanted):
+    """Print the address if someone is there to read it.
+
+    The address holds the access token. Started from the menu, what is printed
+    goes into a log file, which must not hold it: others on a shared computer
+    might read it, and the file may be sent with a problem report.
+    """
+    if wanted or (sys.stdout is not None and sys.stdout.isatty()):
+        print(f"PYSME_GUI_URL {url}", flush=True)
+
+
+def show(url):
+    """Open the interface in the web browser."""
+    if not webbrowser.open(url):
+        print("No web browser could be opened. Run pysme-gui --no-browser in a "
+              "terminal to get the address.", flush=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pysme-gui", description="PySME graphical interface")
     parser.add_argument("file", nargs="?", help=".sme file, line list or spectrum to open")
@@ -752,10 +791,10 @@ def main(argv=None):
     if browser_version and not args.file and not args.port:
         url = instance.running()
         if url:
-            print(f"PYSME_GUI_URL {url}", flush=True)
+            announce(url, args.no_browser)
             print("PySME is already running; this shows it again.", flush=True)
             if not args.no_browser:
-                webbrowser.open(url)
+                show(url)
             return
 
     app, server, url = create_server(args.port)
@@ -780,13 +819,14 @@ def main(argv=None):
 
         threading.Thread(target=watch_parent, daemon=True).start()
 
-    print(f"PYSME_GUI_URL {url}", flush=True)
+    # --no-browser asks for the address; the Mac app reads it and hides it.
+    announce(url, args.no_browser or args.app_mode)
     if browser_version:
         app.on_quit = stop              # the Mac app quits by its own menu
         instance.register(url)
         print("To quit: ⋯ → Quit PySME in the window, or Ctrl-C here.", flush=True)
         if not args.no_browser:
-            webbrowser.open(url)
+            show(url)
     try:
         server.serve_forever()
     finally:

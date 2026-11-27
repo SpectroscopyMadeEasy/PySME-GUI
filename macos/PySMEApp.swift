@@ -474,10 +474,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     let reportButton = "Report a problem…"
 
-    var feedbackEmail: String {
-        Bundle.main.infoDictionary?["PySMEFeedbackEmail"] as? String ?? ""
-    }
-
     /// Remove user names from paths; the token is already kept out of the log.
     func redact(_ text: String) -> String {
         var result = text.replacingOccurrences(of: NSHomeDirectory(), with: "~")
@@ -500,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             "PySME-GUI problem report (written by the Mac app, not by the interface)",
             "Created: \(ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: .withInternetDateTime))",
             "", "== What happened ==", problem,
-            "(Please also describe in your email what you were doing.)",
+            "(Please also say what you were doing.)",
             "", "== Versions ==",
             "App: \(bundleID)",
             "", "== System ==",
@@ -535,24 +531,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return nil
     }
 
-    /// Start an email with the report attached. Without a mail program that can
-    /// take attachments, open a plain message and show the file instead.
-    func composeMail(_ file: URL, to: String, subject: String, body: String) {
-        let recipients = to.isEmpty ? [] : [to]
-        if let service = NSSharingService(named: .composeEmail), service.canPerform(withItems: [body, file]) {
-            service.recipients = recipients
-            service.subject = subject
-            service.perform(withItems: [body, file])
-            return
-        }
-        var link = URLComponents()
-        link.scheme = "mailto"
-        link.path = to
-        link.queryItems = [URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "body", value: body)]
-        if let url = link.url { NSWorkspace.shared.open(url) }
-        NSWorkspace.shared.activateFileViewerSelecting([file])
-    }
-
     /// A pre-filled GitHub issue. Only versions go into the address; the user
     /// attaches the file.
     func openIssue(_ file: URL) {
@@ -571,23 +549,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             _ = ask("Could not save the report", tail(), ["OK"])
             return
         }
-        let address = feedbackEmail.isEmpty
-            ? "Send this file to the person who gave you the program."
-            : "Send this file to \(feedbackEmail)."
         let choice = ask("Report saved",
                          "\(file.path)\n\nIt has not been sent yet.\n\n"
-                         + "Email: \(address) “Write email” tries to attach the file; "
-                         + "with webmail, attach it yourself.\n\n"
-                         + "GitHub issue: needs a GitHub account. Drag the file into the page. Issues are public.",
-                         ["Write email", "Open GitHub issue", "Show file", "Back"])
+                         + "GitHub issue: needs a GitHub account. Drag the file into the page. Issues are public.\n\n"
+                         + "Without GitHub: give the file to the person who gave you the program.",
+                         ["Open GitHub issue", "Show file", "Back"])
         if choice == "Back" { return }
         if choice == "Show file" {
             NSWorkspace.shared.activateFileViewerSelecting([file])
-        } else if choice == "Open GitHub issue" {
-            openIssue(file)
         } else {
-            composeMail(file, to: feedbackEmail, subject: "PySME-GUI problem report (app \(bundleVersion), macOS)",
-                        body: "My problem report is in the file \(file.lastPathComponent).\n(If it is not attached yet, please attach it before sending.)\n")
+            openIssue(file)
         }
         // Come back to this message, so that the other program is not covered
         // by the next question straight away.
@@ -692,13 +663,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             panel.beginSheetModal(for: window) { response in
                 if response == .OK, let url = panel.url { try? data.write(to: url) }
             }
-        case "mailReport":
-            let file = URL(fileURLWithPath: body["path"] as? String ?? "")
-            // Only a saved report may be attached.
-            guard file.lastPathComponent.hasPrefix("PySME-report-"), file.pathExtension == "txt",
-                  FileManager.default.fileExists(atPath: file.path) else { break }
-            composeMail(file, to: body["to"] as? String ?? "",
-                        subject: body["subject"] as? String ?? "", body: body["body"] as? String ?? "")
         case "theme":
             applyAppearance(body["value"] as? String ?? "auto")
         case "restart":

@@ -149,3 +149,13 @@ def test_the_plot_script_comes_with_the_interface(server, monkeypatch):
     _, base = server
     status, body = request(base, "/vendor/plotly.min.js")
     assert status == 200 and len(body) > 1_000_000 and b"plotly.js v" in body[:500]
+
+
+def test_the_page_can_say_it_has_shown_a_result(server):
+    app, base = server
+    app.updater.state = {"state": "done", "message": "Installed.", "seen": False}
+    update = json.loads(request(base, "/api/state", token=app.token)[1])["update"]
+    assert update["task"]["seen"] is False and "restart" in update
+    assert request(base, "/api/update/seen", body={})[0] == 403
+    status, body = request(base, "/api/update/seen", token=app.token, body={})
+    assert status == 200 and json.loads(body)["update"]["task"]["seen"] is True

@@ -1,7 +1,7 @@
-"""Problem reports: one plain-text file that a user can attach to an email.
+"""Problem reports: one plain-text file that a user can pass on.
 
 Nothing is sent from here. The text is shown to the user, who may edit it,
-then saves it and mails it. Spectra and line lists are never included.
+then saves it and passes it on. Spectra and line lists are never included.
 """
 
 import locale

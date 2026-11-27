@@ -104,8 +104,9 @@ def test_save_writes_edited_text_and_never_overwrites(server, home):
     assert os.path.dirname(first["path"]) == str(home / "Downloads")
     with open(first["path"], encoding="utf-8-sig") as handle:
         assert handle.read() == "edited 报告\n"
-    assert os.path.basename(first["path"]) in first["body"]
-    assert first["subject"].startswith("PySME-GUI problem report (GUI ")
+    # No e-mail address or message: the report goes to GitHub or by hand.
+    assert set(first) == {"path", "issue_url"}
+    assert os.path.basename(first["path"]) in unquote_plus(first["issue_url"])
 
 
 def test_issue_link_carries_versions_only(server, home):
