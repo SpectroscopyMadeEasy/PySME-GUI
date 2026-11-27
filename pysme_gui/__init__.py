@@ -4,7 +4,7 @@ This module must stay importable without PySME installed: the installer and
 updater read the version from here.
 """
 
-__version__ = "0.3.0a1"
+__version__ = "0.3.0a2"
 
 # The one-click updater installs release tags (v0.3.0a1, ...) of this repository.
 # Pushing a branch releases nothing; see RELEASING.md.
