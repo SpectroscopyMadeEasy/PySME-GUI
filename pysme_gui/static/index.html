@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PySME</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <button type="button" class="wordmark" data-cmd="about" aria-haspopup="dialog" title="About PySME">
+        <img class="on-light" src="wordmark-on-light.png" alt="PySME">
+        <img class="on-dark" src="wordmark-on-dark.png" alt="PySME">
+      </button>
+      <!-- filled in from the version; a final release shows none -->
+      <button type="button" id="stage-badge" class="stage-badge" aria-haspopup="dialog" hidden></button>
+    </div>
+    <div class="group">
+      <button id="btn-new" data-cmd="new" title="Start an empty setup">New</button>
+      <button id="btn-open" data-cmd="open" title="Open an .sme or IDL .inp file (⌘O)">Open…</button>
+      <button id="btn-import" data-cmd="import" title="Import an observed spectrum (text or CSV)">Import spectrum…</button>
+      <button id="btn-save" data-cmd="save" title="Save as .sme (⌘S)">Save</button>
+      <div class="menu">
+        <button id="btn-more" aria-haspopup="true" title="More">⋯</button>
+        <div class="menu-items" id="menu-more" hidden>
+          <button data-cmd="saveAs">Save as…</button>
+          <button data-cmd="linelist">Load VALD line list…</button>
+          <button data-cmd="exportCsv">Export spectrum as CSV…</button>
+          <button data-cmd="exportPng">Export plot as PNG…</button>
+          <button data-cmd="example">Load solar example</button>
+          <button data-cmd="report">Report a problem…</button>
+          <button data-cmd="about">About PySME</button>
+          <button data-cmd="quit" id="btn-quit" hidden>Quit PySME</button>
+        </div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="job" id="job" role="status" aria-live="polite"></div>
+    <div class="group">
+      <button id="btn-synth" class="primary" data-cmd="synth" title="Synthesize (⌘↩)">▶ Synthesize</button>
+      <button id="btn-fit" class="secondary" data-cmd="fit" title="Fit the free parameters (⇧⌘↩)">◎ Fit</button>
+      <button id="btn-stop" class="danger" data-cmd="stop" title="Stop the current run (⌘.)" hidden>■ Stop</button>
+    </div>
+    <div class="group">
+      <div class="menu">
+        <button id="btn-theme" class="ghost" aria-haspopup="true" title="Light or dark appearance">◐ Auto</button>
+        <div class="menu-items right" id="menu-theme" hidden>
+          <button data-theme-choice="auto">Match the system</button>
+          <button data-theme-choice="light">Light</button>
+          <button data-theme-choice="dark">Dark</button>
+        </div>
+      </div>
+      <button id="btn-settings" class="ghost" data-cmd="settings" title="Versions, updates and settings">Updates &amp; settings<span class="dot" id="update-dot" hidden></span></button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <nav class="tabs" id="side-tabs" role="tablist">
+        <button data-tab="star" class="active" role="tab">Star</button>
+        <button data-tab="model" role="tab">Model</button>
+        <button data-tab="fit" role="tab">Fit</button>
+      </nav>
+
+      <div class="side-body">
+        <fieldset id="forms">
+          <section data-panel="star">
+            <h3>Stellar parameters</h3>
+            <div class="grid">
+              <label>T<sub>eff</sub></label><input type="number" data-param="teff" step="50" aria-label="Effective temperature"><span>K</span>
+              <label>log g</label><input type="number" data-param="logg" step="0.1" aria-label="log g"><span>cgs</span>
+              <label>[M/H]</label><input type="number" data-param="monh" step="0.1" aria-label="Metallicity"><span>dex</span>
+              <label title="Radial velocity of the observed spectrum; used only with an observation">v<sub>rad</sub></label><input type="number" data-param="vrad" step="0.5" aria-label="Radial velocity"><span>km/s</span>
+            </div>
+            <p class="hint" id="vrad-hint" hidden></p>
+            <h3>Broadening</h3>
+            <div class="grid">
+              <label>v<sub>mic</sub></label><input type="number" data-param="vmic" step="0.1" min="0" aria-label="Microturbulence"><span>km/s</span>
+              <label>v<sub>mac</sub></label><input type="number" data-param="vmac" step="0.5" min="0" aria-label="Macroturbulence"><span>km/s</span>
+              <label>v sin i</label><input type="number" data-param="vsini" step="0.5" min="0" aria-label="v sin i"><span>km/s</span>
+              <label title="Gaussian instrumental profile. 0 switches it off.">Resolution R</label><input type="number" data-param="ipres" step="1000" min="0" aria-label="Resolving power"><span></span>
+            </div>
+            <p class="hint" id="ip-hint"></p>
+            <h3>Wavelength</h3>
+            <div id="wavelength"></div>
+            <h3>Synthetic spectrum</h3>
+            <div class="segmented" id="flux-scale" role="group" aria-label="Flux scale of the synthetic spectrum">
+              <button type="button" data-normalised="true">Normalised</button>
+              <button type="button" data-normalised="false">Not normalised</button>
+            </div>
+            <p class="hint" id="flux-hint"></p>
+          </section>
+
+          <section data-panel="model" hidden>
+            <h3>Line list</h3>
+            <div class="card" id="linelist-card"></div>
+
+            <h3>Model atmosphere</h3>
+            <div class="grid wide">
+              <label>Grid</label><select data-param="atmo.source" id="atmo-source" aria-label="Atmosphere grid"></select>
+              <label title="grid: interpolate in the model grid. embedded: use the single model stored in the file.">Method</label>
+              <select data-param="atmo.method" aria-label="Atmosphere method"><option value="grid">grid (interpolate)</option><option value="embedded">embedded (from file)</option></select>
+              <label>Geometry</label>
+              <select data-param="atmo.geom" aria-label="Geometry"><option value="auto">auto</option><option value="PP">plane parallel</option><option value="SPH">spherical</option></select>
+              <label>Depth scale</label>
+              <select data-param="atmo.depth" aria-label="Depth scale"><option value="auto">auto</option><option value="RHOX">RHOX</option><option value="TAU">TAU</option></select>
+              <label>Interpolate on</label>
+              <select data-param="atmo.interp" aria-label="Interpolation scale"><option value="auto">auto</option><option value="RHOX">RHOX</option><option value="TAU">TAU</option></select>
+            </div>
+
+            <h3>Abundance pattern</h3>
+            <div class="row">
+              <select id="abund-pattern" aria-label="Solar abundance pattern"></select>
+              <button type="button" id="btn-apply-pattern" title="Replaces all element abundances">Apply</button>
+            </div>
+            <p class="hint">Edit single elements in the <a href="#" data-goto="abund">Abundances</a> tab below the plot.</p>
+
+            <details>
+              <summary>Numerics</summary>
+              <div class="grid wide">
+                <label>accwi <button type="button" class="help" data-help="help-accwi" aria-expanded="false" aria-label="What is accwi?">?</button></label><input type="number" data-param="accwi" step="0.001" aria-label="accwi">
+                <div class="help-box" id="help-accwi" hidden>
+                  <b>How finely the wavelength grid is refined</b>
+                  <p>PySME computes the spectrum on a wavelength grid of its own. It computes a point halfway between two neighbours, and if that differs from a straight line between them by more than about <i>accwi</i> times the continuum, it splits the interval again.</p>
+                  <p>Smaller: more points, more accurate, slower. It is not a limit on the error of the final spectrum. It also matters with a fixed Step or an observed spectrum, whose points are interpolated from this grid. PySME's default is 0.003.</p>
+                </div>
+                <label>accrt <button type="button" class="help" data-help="help-accrt" aria-expanded="false" aria-label="What is accrt?">?</button></label><input type="number" data-param="accrt" step="0.0001" aria-label="accrt">
+                <div class="help-box" id="help-accrt" hidden>
+                  <b>Which weak lines and line wings count</b>
+                  <p><i>accrt</i> is compared with the ratio of a line's opacity to the continuum opacity. A line that stays below it at its centre, in every layer of the atmosphere, is left out. Any other line is computed only as far into its wings as it stays above it.</p>
+                  <p>Smaller: more weak lines and wider wings are included, slower. It is a threshold on opacity, not a limit on the error of the spectrum. PySME's default is 0.0001.</p>
+                </div>
+                <label>μ angles</label><input type="number" data-param="nmu" step="1" min="1" max="77" aria-label="Number of mu angles">
+                <details class="mu-values" id="mu-details">
+                  <summary>μ values <span id="mu-state"></span></summary>
+                  <textarea data-param="mu" rows="3" spellcheck="false" aria-label="Mu values"></textarea>
+                  <p class="hint">The intensity is computed at these angles, μ = cos θ: 1 at the centre of the stellar disc, towards 0 at the limb. Each value stands for a ring of the disc, and the spectrum is the flux of the whole disc added up from the rings. Separate values with commas or spaces.</p>
+                  <p class="hint">With a single value the result is the intensity at that angle (times π when not normalised), and v sin i is not applied. Changing the number of angles above puts PySME's default values back.</p>
+                  <button type="button" id="mu-default">Use the default values</button>
+                </details>
+                <label title="Scaling of van der Waals damping">γ6 factor</label><input type="number" data-param="gam6" step="0.1">
+                <label>H₂ broadening</label><input type="checkbox" data-param="h2broad">
+              </div>
+            </details>
+          </section>
+
+          <section data-panel="fit" hidden>
+            <h3>Free parameters</h3>
+            <div class="chips" id="fit-basic"></div>
+            <div class="segmented" id="vrad-mode" role="group" aria-label="How v_rad is fitted" hidden>
+              <button type="button" data-vrad="whole">Same for all segments</button>
+              <button type="button" data-vrad="each">One per segment</button>
+            </div>
+            <div class="row">
+              <select id="fit-element" aria-label="Element to fit"></select>
+              <button type="button" id="btn-add-abund">Add abundance</button>
+            </div>
+            <div class="chips" id="fit-abunds"></div>
+
+            <h3>Continuum</h3>
+            <div class="grid wide">
+              <label>Correction</label>
+              <select data-param="cscale_flag" aria-label="Continuum correction">
+                <option value="none">none</option><option value="fix">keep current</option><option value="constant">constant</option>
+                <option value="linear">linear</option><option value="quadratic">quadratic</option>
+              </select>
+              <label>Method</label>
+              <select data-param="cscale_type" aria-label="Continuum method">
+                <option>mask</option><option>match</option><option>match+mask</option><option>matchlines</option>
+                <option>matchlines+mask</option><option>spline</option><option>spline+mask</option><option>mcmc</option>
+              </select>
+            </div>
+            <p class="hint">The continuum correction is used only with an observation.</p>
+
+            <div id="snr-block" hidden>
+              <h3>Uncertainties</h3>
+              <div class="grid wide">
+                <label>Assumed S/N</label><input type="number" data-param="snr" step="10" min="10" aria-label="Assumed signal to noise">
+              </div>
+              <p class="hint">The observation has no uncertainty column.</p>
+            </div>
+          </section>
+        </fieldset>
+      </div>
+
+      <div class="readiness" id="readiness"></div>
+    </aside>
+
+    <section class="work" id="work">
+      <div class="plot-toolbar">
+        <div class="segmented" id="view-tabs" role="group" aria-label="What the panel shows">
+          <button type="button" data-view="spectrum" class="active" aria-pressed="true">Spectrum</button>
+          <button type="button" data-view="pattern" aria-pressed="false">Abundance pattern</button>
+        </div>
+        <div class="segmented abund-scale for-pattern" role="group" aria-label="How abundances are written" hidden>
+          <button type="button" data-scale="A">A(X)</button>
+          <button type="button" data-scale="ratio">[X/Fe]</button>
+        </div>
+        <span class="hint for-pattern" id="pattern-note" hidden></span>
+        <div class="for-spectrum">
+        <!-- with none of them on, dragging zooms -->
+        <div class="menu mask-tools">
+          <div class="segmented" id="tools" aria-label="Mask tools">
+            <button data-tool="1" aria-pressed="false" title="Drag across pixels to add the line mask: these pixels are fitted. Click again to go back to zooming."><i class="swatch line"></i>Line mask</button>
+            <button data-tool="2" aria-pressed="false" title="Drag across pixels to add the continuum mask. A pixel can carry several masks. Click again to go back to zooming."><i class="swatch cont"></i>Continuum mask</button>
+            <button data-tool="4" id="tool-vrad" aria-pressed="false" hidden title="Drag across pixels to add the velocity mask. While no pixel has been marked or removed this way, the velocity uses the line mask; after that, only the velocity mask. Click again to go back to zooming."><i class="swatch vrad"></i>Velocity mask</button>
+            <button data-tool="0" aria-pressed="false" title="Drag across pixels to remove masks from them; choose which with the arrow. Click again to go back to zooming."><span aria-hidden="true">✕</span><span id="remove-label">Remove mask</span></button>
+            <button id="btn-remove-what" aria-haspopup="true" aria-label="Choose what to remove" title="Choose what to remove">▾</button>
+          </div>
+          <div class="menu-items right" id="menu-remove" hidden>
+            <button data-remove="0">All masks</button>
+            <button data-remove="1">Line mask only</button>
+            <button data-remove="2">Continuum mask only</button>
+            <button data-remove="4">Velocity mask only</button>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="show-resid" checked> Residuals</label>
+        <label class="check"><input type="checkbox" id="show-lines" checked> Line IDs</label>
+        <div class="spacer"></div>
+        <label class="inline" id="segment-wrap" hidden>Segment <select id="segment"></select></label>
+        <label class="inline" id="compare-wrap" hidden>Compare with <select id="compare"></select></label>
+        </div>
+      </div>
+      <div class="banner" id="banner" hidden></div>
+      <div class="plot-area">
+        <div id="plot"></div>
+        <div id="crosshair" hidden></div>
+        <div id="readout" hidden></div>
+        <div id="pattern" hidden></div>
+        <div class="empty" id="empty">
+          <div id="empty-start">
+            <h2>Synthesize or fit a spectrum</h2>
+            <p>Start from the built-in example, open an SME file, or set up your own star.</p>
+            <div class="empty-actions">
+              <button class="primary" data-cmd="example">Try the solar example</button>
+              <button data-cmd="open">Open .sme…</button>
+              <button data-cmd="linelist">Load line list…</button>
+              <button data-cmd="import">Import spectrum…</button>
+            </div>
+            <ol>
+              <li>Load a VALD line list.</li>
+              <li>Set the stellar parameters and a wavelength range, or import an observation.</li>
+              <li>Press <b>Synthesize</b>. To fit, choose free parameters in the <b>Fit</b> tab.</li>
+            </ol>
+          </div>
+          <div id="empty-ready" hidden>
+            <h2>Ready to synthesize</h2>
+            <p>Press the button, or ⌘↩. The first run with a model grid downloads it.</p>
+            <div class="empty-actions"><button class="primary" data-cmd="synth">▶ Synthesize</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="splitter" id="splitter" title="Drag to resize"></div>
+
+      <div class="drawer" id="drawer">
+        <nav class="tabs" id="drawer-tabs" role="tablist">
+          <button data-tab="results" class="active" role="tab">Results</button>
+          <button data-tab="lines" role="tab">Line list</button>
+          <button data-tab="abund" role="tab">Abundances</button>
+          <button data-tab="log" role="tab">Log</button>
+          <button data-tab="cite" role="tab">Citations</button>
+          <div class="spacer"></div>
+          <button id="drawer-toggle" class="ghost" title="Show or hide this panel">▾</button>
+        </nav>
+        <div class="drawer-body">
+          <section data-panel="results" id="results"></section>
+          <section data-panel="lines" hidden>
+            <div class="row">
+              <input type="search" id="line-search" placeholder="Species (Fe, Fe 2) or range (6438-6441)" aria-label="Search lines">
+              <button id="line-prev" title="Previous page">‹</button><span id="line-page" class="hint"></span><button id="line-next" title="Next page">›</button>
+              <button data-cmd="linelist">Load VALD list…</button>
+            </div>
+            <div class="line-editor" id="line-editor" hidden>
+              <b id="line-name"></b>
+              <label>log gf <input type="number" step="0.1" data-line="gflog"></label>
+              <label title="Excitation potential of the lower level, eV">χ (eV) <input type="number" step="0.1" min="0" data-line="excit" class="long"></label>
+              <label>λ (Å) <input type="number" step="0.01" data-line="wlcent" class="long"></label>
+              <label title="Radiative damping, as in the VALD list">Rad. <input type="number" step="0.1" data-line="gamrad"></label>
+              <label title="Stark damping, as in the VALD list">Stark <input type="number" step="0.1" data-line="gamqst"></label>
+              <label title="As in the VALD list: a negative value is a logarithmic width, a positive one is in ABO notation">van der Waals <input type="number" step="0.1" data-line="gamvw" class="long"></label>
+              <span class="hint" id="line-note"></span>
+              <span class="actions">
+                <button type="button" id="line-reset">Restore line</button>
+                <button type="button" id="line-reset-all"></button>
+                <button type="button" id="line-close" class="ghost" title="Stop marking this line">✕</button>
+              </span>
+            </div>
+            <div class="line-scroll"><table id="line-table"></table></div>
+          </section>
+          <section data-panel="abund" hidden>
+            <div class="abund-layout">
+              <div class="abund-table">
+                <div class="ptable" id="ptable">
+                  <!-- the empty upper part of the periodic table holds its controls -->
+                  <div class="table-controls">
+                    <div class="segmented abund-scale" role="group" aria-label="How abundances are written">
+                      <button type="button" data-scale="A" title="A(X) = log10(N_X / N_H) + 12, including [M/H]">A(X)</button>
+                      <button type="button" data-scale="ratio" title="[X/Fe] against the solar reference; the Fe box holds [Fe/H]">[X/Fe]</button>
+                    </div>
+                    <label class="inline" title="The solar abundances [X/Fe] is written against. Changing this changes no abundance and no spectrum.">Solar reference
+                      <select id="solar-reference" aria-label="Solar reference"></select></label>
+                  </div>
+                  <div class="table-notes">
+                    <p class="hint abund-legend"><span class="key-nlte">N</span> NLTE: outline = grid exists, filled = on
+                      <span class="key-fit"></span> fit (point at an element)</p>
+                    <div class="nlte-summary" id="nlte-summary" hidden></div>
+                  </div>
+                </div>
+              </div>
+              <div class="element-editor" id="element-editor"></div>
+            </div>
+          </section>
+          <section data-panel="log" hidden><pre id="log"></pre></section>
+          <section data-panel="cite" hidden>
+            <div class="row">
+              <select id="cite-format" aria-label="Citation format"><option value="plaintext">Plain text</option><option value="bibtex">BibTeX</option></select>
+              <button id="cite-copy">Copy</button><button id="cite-save">Save…</button>
+              <span class="hint" id="cite-hint">References for the code, line data, atmosphere, abundances and NLTE grids in this setup.</span>
+            </div>
+            <div class="banner cite-from" id="cite-from" hidden><span>Only the line <b id="cite-line"></b></span><span class="actions"><button type="button" id="cite-all">Show all references</button><button type="button" id="cite-back">Back to the line list</button></span></div>
+            <div id="cite-list"></div>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+  <dialog id="dialog"></dialog>
+
+  <script src="vendor/plotly.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

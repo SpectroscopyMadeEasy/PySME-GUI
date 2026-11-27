@@ -1,0 +1,87 @@
+name: Linux
+
+# Called by "Tests and packages" (packages.yml); can also be run by hand.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The older one also stands for users with an older C library.
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # As a new user gets it: an archive without git, an empty home folder.
+      - name: Install from a downloaded archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/download" "$RUNNER_TEMP/user home"
+          git archive --format=tar.gz --prefix=PySME-GUI/ HEAD -o "$RUNNER_TEMP/download/PySME-GUI.tar.gz"
+          tar -xzf "$RUNNER_TEMP/download/PySME-GUI.tar.gz" -C "$RUNNER_TEMP/download"
+          HOME="$RUNNER_TEMP/user home" "$RUNNER_TEMP/download/PySME-GUI/linux/install.sh"
+
+      - name: The menu entry is valid
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -qq -y desktop-file-utils
+          desktop-file-validate "$RUNNER_TEMP/user home/.local/share/applications/pysme-gui.desktop"
+          cat "$RUNNER_TEMP/user home/.local/share/applications/pysme-gui.desktop"
+
+      - name: The installed program starts, synthesizes and quits
+        run: |
+          rm -rf "$RUNNER_TEMP/download"      # it must not depend on the download
+          HOME="$RUNNER_TEMP/user home" python3 tools/smoke.py "$RUNNER_TEMP/user home/.local/bin/pysme-gui"
+
+      # On a real kernel: one request, right token and all, from this user and
+      # from another one.
+      - name: Another user of the computer is refused, token and all
+        run: |
+          set -u
+          out="$RUNNER_TEMP/address.txt"
+          HOME="$RUNNER_TEMP/user home" "$RUNNER_TEMP/user home/.local/bin/pysme-gui" --no-browser > "$out" 2>&1 &
+          program=$!
+          trap 'kill $program 2>/dev/null || true' EXIT
+          url=""
+          for _ in $(seq 1 120); do
+            url=$(sed -n 's/^PYSME_GUI_URL //p' "$out")
+            [ -n "$url" ] && break
+            sleep 1
+          done
+          [ -n "$url" ] || { echo "no address"; exit 1; }
+          token=${url#*token=}
+          state=${url%%/\?*}/api/state
+          [ "$(id -u nobody)" != "$(id -u)" ] || { echo "nobody is this user"; exit 1; }
+          # Prints the HTTP status and how curl ended. 000 alone would not do: it
+          # is also what a connection gives that never reached the program. curl
+          # ends with 52 or 56 when it was connected and then hung up on.
+          ask() {
+            local ended=0 status
+            status=$("$@" curl --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              -H "X-PySME-Token: $token" "$state") || ended=$?
+            echo "$status $ended"
+          }
+          before=$(ask env)
+          other=$(ask sudo -u nobody)
+          after=$(ask env)      # still there: it did not just stop listening
+          echo "this user: $before | another user: $other | this user again: $after"
+          [ "$before" = "200 0" ] && [ "$after" = "200 0" ] || { echo "this user was not answered"; exit 1; }
+          case "$other" in
+            "000 52" | "000 56") echo "the other user was connected and hung up on" ;;
+            *) echo "this does not show a refusal"; exit 1 ;;
+          esac
+
+      - name: Automated tests with the installed PySME
+        run: |
+          data="$RUNNER_TEMP/user home/.local/share/pysme-gui"
+          env_id=$(sed -n 's/^env=//p' "$data/current.sh")
+          python="$data/envs/$env_id/venv/bin/python"
+          uv=$(command -v uv || echo "$data/bin/uv")
+          "$uv" pip install --python "$python" pytest
+          HOME="$RUNNER_TEMP/test home" "$python" -m pytest -q -p no:cacheprovider tests --show-capture=no
