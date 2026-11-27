@@ -1,0 +1,273 @@
+name: Packages
+
+# Make the three downloads and install each as a user would.
+# A push to desktop-app only builds and checks them (they are attached to the run).
+# The tag of a beta, release candidate or release also makes a *draft* release
+# holding them; nobody else sees it until a maintainer publishes it. Alpha
+# versions get no release (RELEASING.md).
+
+on:
+  push:
+    branches: [desktop-app]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  PYSME_GUI_NOPAUSE: "1"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+      prerelease: ${{ steps.read.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the version, and hold a tag to it
+        id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' pysme_gui/__init__.py)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::Unexpected version: '$version'"
+            exit 1
+          fi
+          release=false
+          prerelease=false
+          if [[ "$version" =~ (b|rc)[0-9]+$ ]]; then prerelease=true; fi
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match the version in the code, $version"
+              exit 1
+            fi
+            if [[ ! "$version" =~ a[0-9]+$ ]]; then release=true; fi
+          fi
+          {
+            echo "version=$version"
+            echo "release=$release"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::version $version, draft release: $release, pre-release: $prerelease"
+
+  # One job makes both: they are the same files with another installer.
+  archives:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Make the Windows and Linux downloads
+        run: python3 tools/package.py --output packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-windows
+          path: packages/*-Windows-x64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-linux
+          path: packages/*-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  mac:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the app and the disk image
+        run: macos/build.sh
+
+      # The app is checked as it comes out of the disk image, not as built.
+      - name: Take the app out of the disk image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          dmg="dist/PySME-$VERSION-macOS-arm64.dmg"
+          mount="$RUNNER_TEMP/mounted"
+          hdiutil verify "$dmg"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount"
+          ls -la "$mount"
+          [[ "$(readlink "$mount/Applications")" == /Applications ]]
+          mkdir -p "$RUNNER_TEMP/Applications test"
+          ditto "$mount/PySME.app" "$RUNNER_TEMP/Applications test/PySME.app"
+          hdiutil detach "$mount"
+
+      - name: Install from the app and run it
+        run: tools/check_mac_app.sh "$RUNNER_TEMP/Applications test/PySME.app"
+
+      # Not required yet: it needs a window, and this has not been tried on
+      # GitHub's machines. A warning on the run says how it went.
+      - name: First launch of the app itself
+        id: window
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/selftest"
+          mkdir -p "$out" "$RUNNER_TEMP/first launch/home"
+          HOME="$RUNNER_TEMP/first launch/home" \
+          PYSME_GUI_HOME="$RUNNER_TEMP/first launch/PySME-GUI" \
+          PYSME_GUI_SELFTEST="$out" \
+            "$RUNNER_TEMP/Applications test/PySME.app/Contents/MacOS/PySME"
+          cat "$out/report.json"
+          /usr/bin/python3 - "$out/report.json" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          good = report.get("job") == "done" and report.get("pixels", 0) > 100 and not report.get("errors")
+          sys.exit(0 if good else 1)
+          EOF
+
+      - name: Say how the first launch went
+        if: always() && steps.window.outcome != 'skipped'
+        env:
+          OUTCOME: ${{ steps.window.outcome }}
+        run: |
+          if [[ "$OUTCOME" == success ]]; then
+            echo "::notice::First launch of the app in a window: passed"
+          else
+            echo "::warning::First launch of the app in a window: $OUTCOME (see the step; not required yet)"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-first-launch
+          path: ${{ runner.temp }}/selftest
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-macos
+          path: dist/*-macOS-arm64.dmg
+          if-no-files-found: error
+
+  check-linux:
+    needs: archives
+    runs-on: ubuntu-22.04      # the older one stands for an older C library too
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5      # only for the check script
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: download-linux
+          path: ${{ runner.temp }}/download
+
+      - name: Install from the download
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/download"
+          tar -xzf PySME-*-Linux-x86_64.tar.gz
+          mkdir -p "$RUNNER_TEMP/user home"
+          HOME="$RUNNER_TEMP/user home" PySME-*/linux/install.sh
+
+      - name: The installed program starts, synthesizes and quits
+        run: |
+          rm -rf "$RUNNER_TEMP/download"      # it must not depend on the download
+          HOME="$RUNNER_TEMP/user home" python3 tools/smoke.py "$RUNNER_TEMP/user home/.local/bin/pysme-gui"
+
+  check-windows:
+    needs: archives
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5      # only for the check script
+
+      - uses: actions/setup-python@v6  # only to run the check script
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: download-windows
+          path: ${{ runner.temp }}/download
+
+      # Folder names with spaces and Chinese characters, as many users have.
+      - name: Install from the download
+        run: |
+          $base = Join-Path $env:RUNNER_TEMP "测试 user"
+          New-Item -ItemType Directory -Force -Path "$base\download", "$base\home" | Out-Null
+          $zip = Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\download" -Filter "PySME-*-Windows-x64.zip" | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath "$base\download"
+          $folder = (Get-ChildItem -LiteralPath "$base\download" -Directory | Select-Object -First 1).FullName
+          "BASE=$base" >> $env:GITHUB_ENV
+          "PYSME_GUI_HOME=$base\AppData\PySME-GUI" >> $env:GITHUB_ENV
+          $env:PYSME_GUI_HOME = "$base\AppData\PySME-GUI"
+          & "$folder\windows\Install PySME.cmd"
+          if ($LASTEXITCODE -ne 0) { throw "the installer failed" }
+          # The installation must not depend on the download.
+          Remove-Item -LiteralPath "$base\download" -Recurse -Force
+
+      - name: The installed program starts, synthesizes and quits
+        run: |
+          $env:USERPROFILE = "$env:BASE\home"
+          $current = Get-Content -LiteralPath "$env:PYSME_GUI_HOME\current.json" -Raw -Encoding utf8 | ConvertFrom-Json
+          $python = "$env:PYSME_GUI_HOME\envs\$($current.current.env)\venv\Scripts\python.exe"
+          python tools/smoke.py $python "$env:PYSME_GUI_HOME\launch.py" --console
+          if ($LASTEXITCODE -ne 0) { throw "the check failed" }
+
+  draft-release:
+    needs: [version, archives, mac, check-linux, check-windows]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: download-*
+          path: files
+          merge-multiple: true
+
+      - name: Make the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          names=(
+            "PySME-$VERSION-macOS-arm64.dmg"
+            "PySME-$VERSION-Windows-x64.zip"
+            "PySME-$VERSION-Linux-x86_64.tar.gz"
+          )
+          # All three, or nothing is made.
+          for name in "${names[@]}"; do
+            [[ -s "files/$name" ]] || { echo "::error::Missing download: $name"; exit 1; }
+          done
+          (cd files && sha256sum "${names[@]}" > SHA256SUMS.txt)
+          sed "s/@VERSION@/$VERSION/g" tools/release-notes.md > notes.md
+
+          options=(--draft --verify-tag --title "PySME-GUI $VERSION" --notes-file notes.md)
+          if [[ "$PRERELEASE" == true ]]; then options+=(--prerelease); fi
+          # A release that exists is never replaced: this then fails.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::A release for $GITHUB_REF_NAME already exists."
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "${names[@]/#/files/}" files/SHA256SUMS.txt "${options[@]}"
+          echo "::notice::Draft release made. Check it on the Releases page, then publish it."

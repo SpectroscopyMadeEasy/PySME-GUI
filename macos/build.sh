@@ -73,7 +73,7 @@ if [ "${SKIP_DMG:-}" = 1 ]; then
 fi
 
 # 5. Disk image: a small window with the app, an arrow and the Applications folder.
-DMG="$DIST/PySME-$VERSION-arm64.dmg"
+DMG="$DIST/PySME-$VERSION-macOS-arm64.dmg"
 "$ROOT/macos/make_dmg.sh" "$APP" "$DIST/PySME.app/Contents/Resources/bin/uv" "PySME $VERSION" "$DMG"
 
 echo "App: $APP"

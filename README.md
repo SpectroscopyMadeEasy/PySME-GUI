@@ -15,9 +15,13 @@ lower right: dark mode).*
 
 ## Install
 
+Downloads are on the repository's *Releases* page, one file for each system
+below (you do not need the *Source code* files that GitHub adds). Alpha versions
+have no release there.
+
 ### macOS (Apple Silicon, macOS 15 or newer)
 
-1. Open `PySME-<version>-arm64.dmg`.
+1. Open `PySME-<version>-macOS-arm64.dmg`.
 2. Drag **PySME** onto **Applications**.
 3. Open PySME. The first launch downloads Python, PySME and their dependencies
    (needs a network connection and about 900 MB of disk). Later launches start
@@ -32,8 +36,8 @@ the first attempt, open *System Settings → Privacy & Security* and choose
 
 ### Linux (x86_64)
 
-Download the source archive (`Source code (tar.gz)`) of a release from the
-repository's *Releases* page, or clone the repository. In the unpacked folder run
+Download `PySME-<version>-Linux-x86_64.tar.gz` and unpack it, or clone the
+repository. In the unpacked folder run
 
 ```bash
 linux/install.sh
@@ -53,8 +57,7 @@ again shows it. What it prints when started from the menu is kept in
 
 **New and little tried:** so far it has run only on GitHub's Windows machines.
 
-1. Download the source archive (`Source code (zip)`) of a release from the
-   repository's *Releases* page.
+1. Download `PySME-<version>-Windows-x64.zip`.
 2. **Extract the whole zip file** (right-click, *Extract All…*).
 3. In the extracted folder, open `windows` and double-click
    **Install PySME.cmd**. If Windows shows *Windows protected your PC*, choose
@@ -232,6 +235,7 @@ native window.
 python -m pysme_gui                 # in any environment with pysme-astro
 python -m pytest tests              # runs real PySME; downloads MARCS once
 macos/build.sh                      # dist/PySME.app and the disk image
+tools/package.py                    # the Windows and Linux downloads, from HEAD
 ```
 
 The server listens on 127.0.0.1 only, requires a random per-session token, and
