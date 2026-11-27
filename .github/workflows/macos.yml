@@ -1,0 +1,59 @@
+name: Mac
+
+# Called by "Tests and packages" (packages.yml); can also be run by hand.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  VECLIB_MAXIMUM_THREADS: "1"
+
+jobs:
+  install-and-test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      # Only for the "uv" it carries: the app itself is checked in packages.yml.
+      - name: Build the app
+        run: SKIP_DMG=1 macos/build.sh
+
+      - name: Install as the app does on its first launch
+        run: |
+          set -euo pipefail
+          uv="$PWD/dist/PySME.app/Contents/Resources/bin/uv"
+          export PYSME_GUI_HOME="$RUNNER_TEMP/PySME-GUI" PYSME_GUI_UV="$uv"
+          export UV_PYTHON_INSTALL_DIR="$PYSME_GUI_HOME/python" UV_CACHE_DIR="$PYSME_GUI_HOME/cache"
+          export PYTHONDONTWRITEBYTECODE=1 MPLBACKEND=Agg
+          mkdir -p "$PYSME_GUI_HOME" "$RUNNER_TEMP/user home"
+          HOME="$RUNNER_TEMP/user home" "$uv" run --no-project --managed-python --python 3.12 \
+            pysme_gui/envmanager.py install --source "$PWD"
+
+      - name: Automated tests with the installed PySME
+        id: tests
+        shell: bash       # with pipefail, so a failed test is not hidden by tee
+        run: |
+          uv="$PWD/dist/PySME.app/Contents/Resources/bin/uv"
+          found=("$RUNNER_TEMP/PySME-GUI/envs"/*/venv/bin/python)
+          python=${found[0]}
+          UV_CACHE_DIR="$RUNNER_TEMP/PySME-GUI/cache" "$uv" pip install --python "$python" pytest
+          mkdir -p "$RUNNER_TEMP/test home"
+          HOME="$RUNNER_TEMP/test home" "$python" -m pytest -q -p no:cacheprovider \
+            tests --show-capture=no -rs 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      # The full log needs a GitHub sign-in; an annotation can be read without.
+      - name: Show the end of the tests as an annotation
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          text=$(tail -n 30 "$RUNNER_TEMP/tests.log")
+          text=${text//'%'/%25}
+          text=${text//$'\r'/%0D}
+          text=${text//$'\n'/%0A}
+          echo "::error title=End of the tests::$text"

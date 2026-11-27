@@ -91,15 +91,18 @@ are ignored.
 1. Set `__version__` in `pysme_gui/__init__.py`. Test the interface with
    `PYSME_RECOMMENDED`, and with any other PySME version you want to promise.
 2. Run `python -m pytest tests`, and commit.
-3. Push the commit and wait until its checks have passed, including *Packages*,
-   which makes the three downloads and installs them.
+3. Push the commit and wait until *Tests and packages* has passed on it: the
+   full tests on Linux, Windows and a Mac, and the three downloads, each made and
+   installed.
 4. Tag that commit: `git tag -a v0.3.0a1 -m "PySME-GUI 0.3.0a1"`.
 5. Push the tag. **Pushing the tag publishes the update** to those whose channel
-   includes it, whether or not the next step succeeds.
+   includes it, whether or not anything on GitHub succeeds afterwards. So tag
+   only a commit that has passed step 3.
 6. GitHub Release: none for alpha. For beta, release candidates and releases,
-   *Packages* makes a **draft** release with the disk image, the Windows zip, the
-   Linux archive and their checksums (marked as *pre-release* except for a
-   release). Try the files, then publish the draft on the *Releases* page.
+   *Tests and packages* runs again on the tag, and only when all of it passes
+   makes a **draft** release with the disk image, the Windows zip, the Linux
+   archive and their checksums (marked as *pre-release* except for a release).
+   Try the files, then publish the draft on the *Releases* page.
    Users who cannot reach GitHub need another download place (not set up yet).
 
 Never move or reuse a published tag: if it is faulty, publish the next number.

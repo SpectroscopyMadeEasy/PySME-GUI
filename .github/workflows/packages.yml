@@ -1,15 +1,18 @@
-name: Packages
+name: Tests and packages
 
-# Make the three downloads and install each as a user would.
-# A push to desktop-app only builds and checks them (they are attached to the run).
+# The one place where everything runs, for a push and for a tag alike:
+# the full tests on Linux, Windows and a Mac (linux.yml, windows.yml, macos.yml),
+# and the three downloads, each made and installed as a user would.
+# A push of a branch only checks (the downloads are attached to the run).
 # The tag of a beta, release candidate or release also makes a *draft* release
-# holding them; nobody else sees it until a maintainer publishes it. Alpha
-# versions get no release (RELEASING.md).
+# holding them, once all of the above has passed; nobody else sees it until a
+# maintainer publishes it. Alpha versions get no release (RELEASING.md).
 
 on:
   push:
-    branches: [desktop-app]
+    branches: [desktop-app, master]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -57,6 +60,18 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
           echo "::notice::version $version, draft release: $release, pre-release: $prerelease"
+
+  tests-linux:
+    needs: version
+    uses: ./.github/workflows/linux.yml
+
+  tests-windows:
+    needs: version
+    uses: ./.github/workflows/windows.yml
+
+  tests-mac:
+    needs: version
+    uses: ./.github/workflows/macos.yml
 
   # One job makes both: they are the same files with another installer.
   archives:
@@ -124,11 +139,9 @@ jobs:
           text=${text//$'\n'/%0A}
           echo "::error title=End of the check::$text"
 
-      # Not required yet: it needs a window, and this has not been tried on
-      # GitHub's machines. A warning on the run says how it went.
+      # It opens the app's window, synthesizes in it and quits.
       - name: First launch of the app itself
         id: window
-        continue-on-error: true
         timeout-minutes: 15
         run: |
           set -euo pipefail
@@ -154,7 +167,9 @@ jobs:
           if [[ "$OUTCOME" == success ]]; then
             echo "::notice::First launch of the app in a window: passed"
           else
-            echo "::warning::First launch of the app in a window: $OUTCOME (see the step; not required yet)"
+            report="$RUNNER_TEMP/selftest/report.json"
+            said=$(head -c 1500 "$report" 2>/dev/null | tr -d '\r\n' || true)
+            echo "::error::First launch of the app in a window: $OUTCOME. Report: ${said//'%'/%25}"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -243,7 +258,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the check failed" }
 
   draft-release:
-    needs: [version, archives, mac, check-linux, check-windows]
+    # Every other job: a job that fails or is skipped keeps this one from running.
+    needs: [version, tests-linux, tests-windows, tests-mac, archives, mac, check-linux, check-windows]
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:

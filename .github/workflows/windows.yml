@@ -1,9 +1,8 @@
 name: Windows
 
+# Called by "Tests and packages" (packages.yml); can also be run by hand.
 on:
-  push:
-    branches: [desktop-app]
-  pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
