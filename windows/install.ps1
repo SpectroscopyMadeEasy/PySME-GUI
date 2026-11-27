@@ -22,6 +22,69 @@ $Links = @(
 )
 $UvVersion = "0.13.10"
 
+# WScript.Shell, the usual way to make a shortcut, refuses paths with characters
+# outside the system's code page, such as some user names. This calls the Unicode
+# interface of Windows itself.
+$ShortcutSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+
+namespace PySMEInstaller
+{
+    // The methods must be listed in Windows' own order; the unused ones hold
+    // their places.
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellLinkW
+    {
+        void GetPath(IntPtr file, int length, IntPtr findData, uint flags);
+        void GetIDList(out IntPtr list);
+        void SetIDList(IntPtr list);
+        void GetDescription(IntPtr name, int length);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetWorkingDirectory(IntPtr directory, int length);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
+        void GetArguments(IntPtr arguments, int length);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+        void GetHotkey(out short hotkey);
+        void SetHotkey(short hotkey);
+        void GetShowCmd(out int command);
+        void SetShowCmd(int command);
+        void GetIconLocation(IntPtr path, int length, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string file);
+    }
+
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+    class ShellLink { }
+
+    public static class Shortcut
+    {
+        public static void Create(string link, string target, string arguments,
+                                  string directory, string icon, string description)
+        {
+            IShellLinkW shortcut = (IShellLinkW)new ShellLink();
+            try
+            {
+                shortcut.SetPath(target);
+                shortcut.SetArguments(arguments);
+                shortcut.SetWorkingDirectory(directory);
+                shortcut.SetIconLocation(icon, 0);
+                shortcut.SetDescription(description);
+                ((IPersistFile)shortcut).Save(link, true);
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(shortcut);
+            }
+        }
+    }
+}
+'@
+
 function Remove-Installation {
     if (Test-Path -LiteralPath $Data) {
         # Never delete a folder that is not an installation of this program.
@@ -124,15 +187,11 @@ function Install-PySME {
     Copy-Item -LiteralPath (Join-Path $Root "windows\launch.py") -Destination $launcher -Force
     Copy-Item -LiteralPath (Join-Path $Root "assets\pysme-icon.ico") -Destination $icon -Force
 
-    $shell = New-Object -ComObject WScript.Shell
+    Add-Type -TypeDefinition $ShortcutSource
     foreach ($link in $Links) {
-        $shortcut = $shell.CreateShortcut($link)
-        $shortcut.TargetPath = $pythonw
-        $shortcut.Arguments = '"' + $launcher + '"'
-        $shortcut.WorkingDirectory = $env:USERPROFILE
-        $shortcut.IconLocation = $icon
-        $shortcut.Description = "Spectroscopy Made Easy"
-        $shortcut.Save()
+        [PySMEInstaller.Shortcut]::Create(
+            $link, $pythonw, ('"' + $launcher + '"'), $env:USERPROFILE, $icon,
+            "Spectroscopy Made Easy")
     }
 
     Write-Host ""

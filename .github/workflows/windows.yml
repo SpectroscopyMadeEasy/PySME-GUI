@@ -56,14 +56,16 @@ jobs:
       - name: The shortcuts point at what was installed
         run: |
           try {
-            $shell = New-Object -ComObject WScript.Shell
+            # Explorer's own object reads Unicode; WScript.Shell does not.
+            $shell = New-Object -ComObject Shell.Application
             foreach ($folder in "Programs", "DesktopDirectory") {
-              $path = Join-Path ([Environment]::GetFolderPath($folder)) "PySME.lnk"
+              $directory = [string][Environment]::GetFolderPath($folder)
+              $path = Join-Path $directory "PySME.lnk"
               if (-not (Test-Path -LiteralPath $path)) { throw "no shortcut at $path" }
-              $link = $shell.CreateShortcut($path)
-              Write-Host "$path -> $($link.TargetPath) $($link.Arguments)"
-              if (-not (Test-Path -LiteralPath $link.TargetPath)) { throw "the target does not exist" }
-              if (-not (Test-Path -LiteralPath $link.Arguments.Trim('"'))) { throw "the launcher does not exist" }
+              $link = $shell.NameSpace($directory).ParseName("PySME.lnk").GetLink
+              Write-Host "$path -> $($link.Path) $($link.Arguments)"
+              if (-not (Test-Path -LiteralPath $link.Path)) { throw "the target does not exist: $($link.Path)" }
+              if (-not (Test-Path -LiteralPath $link.Arguments.Trim('"'))) { throw "the launcher does not exist: $($link.Arguments)" }
             }
           } catch {
             "$_" | Add-Content -LiteralPath $env:CI_LOG -Encoding utf8
@@ -72,8 +74,10 @@ jobs:
 
       - name: Started from the desktop shortcut, it works without a window
         run: |
+          # Found first: the desktop's place may be derived from USERPROFILE.
+          $desktop = Join-Path ([Environment]::GetFolderPath("DesktopDirectory")) "PySME.lnk"
           $env:USERPROFILE = "$env:BASE\home"
-          Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath("DesktopDirectory")) "PySME.lnk")
+          Start-Process -FilePath $desktop
           python tools/smoke.py --attach 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           $failed = $LASTEXITCODE
           Get-Content -LiteralPath "$env:PYSME_GUI_HOME\pysme-gui.log" -Encoding utf8 -ErrorAction SilentlyContinue |
