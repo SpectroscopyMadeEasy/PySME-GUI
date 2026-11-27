@@ -41,36 +41,43 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$base\download", "$base\home" | Out-Null
           "BASE=$base" >> $env:GITHUB_ENV
           "PYSME_GUI_HOME=$base\AppData\PySME-GUI" >> $env:GITHUB_ENV
+          "CI_LOG=$env:RUNNER_TEMP\output.log" >> $env:GITHUB_ENV
 
       # As a new user gets it: a zip without git.
       - name: Install from a downloaded zip
         run: |
           git archive --format=zip --prefix=PySME-GUI/ HEAD -o "$env:BASE\download\PySME-GUI.zip"
           Expand-Archive -LiteralPath "$env:BASE\download\PySME-GUI.zip" -DestinationPath "$env:BASE\download"
-          & "$env:BASE\download\PySME-GUI\windows\Install PySME.cmd"
+          & "$env:BASE\download\PySME-GUI\windows\Install PySME.cmd" 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "the installer failed" }
           # The installation must not depend on the download.
           Remove-Item -LiteralPath "$env:BASE\download" -Recurse -Force
 
       - name: The shortcuts point at what was installed
         run: |
-          $shell = New-Object -ComObject WScript.Shell
-          foreach ($folder in "Programs", "DesktopDirectory") {
-            $path = Join-Path ([Environment]::GetFolderPath($folder)) "PySME.lnk"
-            if (-not (Test-Path -LiteralPath $path)) { throw "no shortcut at $path" }
-            $link = $shell.CreateShortcut($path)
-            Write-Host "$path -> $($link.TargetPath) $($link.Arguments)"
-            if (-not (Test-Path -LiteralPath $link.TargetPath)) { throw "the target does not exist" }
-            if (-not (Test-Path -LiteralPath $link.Arguments.Trim('"'))) { throw "the launcher does not exist" }
+          try {
+            $shell = New-Object -ComObject WScript.Shell
+            foreach ($folder in "Programs", "DesktopDirectory") {
+              $path = Join-Path ([Environment]::GetFolderPath($folder)) "PySME.lnk"
+              if (-not (Test-Path -LiteralPath $path)) { throw "no shortcut at $path" }
+              $link = $shell.CreateShortcut($path)
+              Write-Host "$path -> $($link.TargetPath) $($link.Arguments)"
+              if (-not (Test-Path -LiteralPath $link.TargetPath)) { throw "the target does not exist" }
+              if (-not (Test-Path -LiteralPath $link.Arguments.Trim('"'))) { throw "the launcher does not exist" }
+            }
+          } catch {
+            "$_" | Add-Content -LiteralPath $env:CI_LOG -Encoding utf8
+            throw
           }
 
       - name: Started from the desktop shortcut, it works without a window
         run: |
           $env:USERPROFILE = "$env:BASE\home"
           Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath("DesktopDirectory")) "PySME.lnk")
-          python tools/smoke.py --attach
+          python tools/smoke.py --attach 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           $failed = $LASTEXITCODE
-          Get-Content -LiteralPath "$env:PYSME_GUI_HOME\pysme-gui.log" -Encoding utf8 -ErrorAction SilentlyContinue
+          Get-Content -LiteralPath "$env:PYSME_GUI_HOME\pysme-gui.log" -Encoding utf8 -ErrorAction SilentlyContinue |
+            Tee-Object -Append -FilePath $env:CI_LOG
           if ($failed -ne 0) { throw "the check failed" }
 
       - name: Started twice, it is one and the same
@@ -78,7 +85,7 @@ jobs:
           $env:USERPROFILE = "$env:BASE\home"
           $current = Get-Content -LiteralPath "$env:PYSME_GUI_HOME\current.json" -Raw -Encoding utf8 | ConvertFrom-Json
           $python = "$env:PYSME_GUI_HOME\envs\$($current.current.env)\venv\Scripts\python.exe"
-          python tools/smoke.py $python "$env:PYSME_GUI_HOME\launch.py" --console
+          python tools/smoke.py $python "$env:PYSME_GUI_HOME\launch.py" --console 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "the check failed" }
 
       - name: Automated tests with the installed PySME
@@ -86,24 +93,35 @@ jobs:
           $current = Get-Content -LiteralPath "$env:PYSME_GUI_HOME\current.json" -Raw -Encoding utf8 | ConvertFrom-Json
           $python = "$env:PYSME_GUI_HOME\envs\$($current.current.env)\venv\Scripts\python.exe"
           $uv = "$env:PYSME_GUI_HOME\bin\uv.exe"
-          & $uv pip install --python $python pytest
+          & $uv pip install --python $python pytest 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "pytest was not installed" }
           $env:USERPROFILE = "$env:BASE\home"
           $env:PYSME_GUI_HOME = $null
-          & $python -m pytest -q -p no:cacheprovider tests --show-capture=no -rs
+          & $python -m pytest -q -p no:cacheprovider tests --show-capture=no -rs 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "tests failed" }
 
       - name: A repair rebuilds the installation
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Repair
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Repair 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "the repair failed" }
 
       - name: It can be removed
         run: |
-          & ".\windows\Uninstall PySME.cmd"
+          & ".\windows\Uninstall PySME.cmd" 2>&1 | Tee-Object -Append -FilePath $env:CI_LOG
           if ($LASTEXITCODE -ne 0) { throw "the uninstaller failed" }
           if (Test-Path -LiteralPath $env:PYSME_GUI_HOME) { throw "the app folder is still there" }
           foreach ($folder in "Programs", "DesktopDirectory") {
             $path = Join-Path ([Environment]::GetFolderPath($folder)) "PySME.lnk"
             if (Test-Path -LiteralPath $path) { throw "a shortcut is still there" }
+          }
+
+      # The full log needs a GitHub sign-in; an annotation can be read without.
+      - name: Show the end of the output as an annotation
+        if: failure()
+        run: |
+          $lines = Get-Content -LiteralPath $env:CI_LOG -Encoding utf8 -ErrorAction SilentlyContinue |
+            Select-Object -Last 30
+          if ($lines) {
+            $text = ($lines -join "`n").Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Host "::error title=End of the output::$text"
           }
