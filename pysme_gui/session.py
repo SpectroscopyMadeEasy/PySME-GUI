@@ -17,7 +17,7 @@ from pysme.continuum_and_radial_velocity import apply_continuum
 from pysme.linelist.vald import ValdFile
 from pysme.sme import MASK_VALUES, SME_Structure
 
-from . import citations
+from . import citations, safe_sme
 from .spectrum_io import read_text_spectrum
 
 SME_EXTENSIONS = {".sme", ".inp", ".sav", ".out"}
@@ -275,7 +275,10 @@ class Session:
             self.import_spectrum(path)
 
     def load_sme(self, path):
-        sme = SME_Structure.load(path)
+        try:
+            sme = safe_sme.load(path)
+        except safe_sme.UnsafeFileError as exc:
+            raise UserError(str(exc))
         self.reset()
         self.sme = sme
         # IDL files can be read but not written, so never save back over them.
@@ -1381,7 +1384,7 @@ class Session:
         initial = {n: self.parameter_value(n) for n in names}
         restore = self._restore_point(names)
         velocity_before = self._velocity_values() if self.sme.vrad_flag in VELOCITY_FREE else None
-        result = SME_Structure.load(path)
+        result = safe_sme.load(path)
         result.fitparameters = names
         self.sme = result
         self.synth_stale = False

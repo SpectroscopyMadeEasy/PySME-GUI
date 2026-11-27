@@ -69,9 +69,9 @@ def run(directory):
     with open(os.path.join(directory, "job.json"), encoding="utf-8") as handle:
         job = json.load(handle)
 
-    from pysme.sme import SME_Structure
+    from pysme_gui import safe_sme
 
-    sme = SME_Structure.load(os.path.join(directory, "in.sme"))
+    sme = safe_sme.load(os.path.join(directory, "in.sme"))
     restore = prepare(sme, job)
 
     if job["kind"] == "synth":
