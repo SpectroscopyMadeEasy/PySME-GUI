@@ -167,7 +167,7 @@ get the same installation as the app), or save the *Package list…* and install
 elsewhere with Python 3.12:
 
 ```bash
-pip install --only-binary pysme-astro -r pysme-1.3.0rc2-packages.txt
+pip install --only-binary pysme-astro -r pysme-1.3.0rc3-packages.txt
 ```
 
 Builds differ between systems, so results need not agree bit for bit. Model

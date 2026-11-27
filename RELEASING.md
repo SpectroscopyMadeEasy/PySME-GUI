@@ -21,7 +21,8 @@ The interface and PySME are versioned separately. Each interface release names
 the PySME that new users get (`PYSME_RECOMMENDED`). A final interface release
 recommends a **final** PySME release; an alpha or beta may recommend a release
 candidate. 0.3.0 begins with `1.3.0rc2`, the first PySME with a package for
-Windows.
+Windows. From 0.3.0a3 it recommends
+`1.3.0rc3`, which no longer runs code named in a `.sme` file.
 
 ## Platforms
 
