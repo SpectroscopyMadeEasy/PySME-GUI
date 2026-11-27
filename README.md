@@ -4,9 +4,11 @@ A desktop interface for [PySME](https://github.com/SpectroscopyMadeEasy/PySME):
 set up a star, synthesize a spectrum, compare it with an observation, edit the
 mask, and fit stellar parameters or abundances.
 
-**This is an alpha version** for internal testing (see
-[RELEASING.md](RELEASING.md)). The interface says so beside its name, *alpha* or
-*beta*, taken from the version number; a final release shows nothing there.
+**This is a beta version**, still being tested (see
+[RELEASING.md](RELEASING.md)). Check results against your own PySME scripts
+before you rely on them, and please report what goes wrong (*⋯ → Report a
+problem…*). The interface says *alpha* or *beta* beside its name, taken from the
+version number; a final release shows nothing there.
 
 ![PySME-GUI after a fit, shown in light mode above the diagonal and in dark mode below it](assets/screenshot-light-dark.png)
 

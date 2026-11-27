@@ -32,4 +32,15 @@ You do not need the *Source code* files that GitHub adds.
 2. In the unpacked folder, run `linux/install.sh`.
 3. Start PySME from the applications menu. It opens in your web browser.
 
+### Test versions and updates
+
+A new installation is offered only final releases as updates. To receive later
+test versions, choose *Updates & settings → Receive → release + beta*.
+
+### Reporting a problem
+
+Choose *⋯ → Report a problem…*, create the report, look it over and save it.
+Then open a GitHub issue and drag the file into it, or give the file to the
+person who invited you. Issues are public: leave out data you may not share.
+
 `SHA256SUMS.txt` lists the checksums of the three files.

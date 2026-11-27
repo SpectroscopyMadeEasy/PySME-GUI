@@ -39,10 +39,12 @@ place is added). The Windows version has so far run only on GitHub's machines.
 
 ## From alpha to beta
 
-- The features of 0.3.0 are fixed, and present on every supported platform.
+- The features of 0.3.0 are fixed, and present on every supported platform. (A
+  page showing the model atmosphere is left for a later version.)
 - The main flows work on a maintainer's Mac: open and save, import an
-  observation, synthesize, fit, NLTE, switch PySME versions, save a problem
-  report and open a GitHub issue with it.
+  observation, synthesize, fit, switch PySME versions, save a problem report and
+  open a GitHub issue with it. NLTE is not run by the maintainers for 0.3.0b1: a
+  beta tester is asked to try it.
 - One real update from one alpha tag to the next works, and so does going back.
 - With the same settings, the interface gives the same result as a PySME script.
 - A from-scratch install into an empty app folder works
@@ -61,6 +63,7 @@ place is added). The Windows version has so far run only on GitHub's machines.
   develop software.
 - On Windows this includes an account without administrator rights and, if a
   tester can be found, Chinese Windows with a Chinese user name.
+- A tester has run an NLTE synthesis and an NLTE fit and checked the results.
 - No known crash, data loss or wrong result.
 - About two weeks without a new serious problem in the last beta.
 
