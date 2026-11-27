@@ -40,6 +40,30 @@ jobs:
           rm -rf "$RUNNER_TEMP/download"      # it must not depend on the download
           HOME="$RUNNER_TEMP/user home" python3 tools/smoke.py "$RUNNER_TEMP/user home/.local/bin/pysme-gui"
 
+      # On a real kernel: one request, right token and all, from this user and
+      # from another one.
+      - name: Another user of the computer is refused, token and all
+        run: |
+          set -u
+          out="$RUNNER_TEMP/address.txt"
+          HOME="$RUNNER_TEMP/user home" "$RUNNER_TEMP/user home/.local/bin/pysme-gui" --no-browser > "$out" 2>&1 &
+          program=$!
+          trap 'kill $program 2>/dev/null || true' EXIT
+          url=""
+          for _ in $(seq 1 120); do
+            url=$(sed -n 's/^PYSME_GUI_URL //p' "$out")
+            [ -n "$url" ] && break
+            sleep 1
+          done
+          [ -n "$url" ] || { echo "no address"; exit 1; }
+          token=${url#*token=}
+          state=${url%%/\?*}/api/state
+          ask() { "$@" curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "X-PySME-Token: $token" "$state" || true; }
+          mine=$(ask env)
+          theirs=$(ask sudo -u nobody)
+          echo "this user: $mine, another user: $theirs (000 = hung up without an answer)"
+          [ "$mine" = 200 ] && [ "$theirs" = 000 ]
+
       - name: Automated tests with the installed PySME
         run: |
           data="$RUNNER_TEMP/user home/.local/share/pysme-gui"

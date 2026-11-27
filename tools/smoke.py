@@ -12,6 +12,7 @@ Uses the standard library only, so any Python can run it.
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -32,7 +33,8 @@ def start(command, output):
     def read():
         for line in process.stdout:
             output.append(line.rstrip())
-            print("  |", line.rstrip(), flush=True)
+            # Test logs are public: the access token stays out of them.
+            print("  |", re.sub(r"(token=)[A-Za-z0-9_\-]+", r"\1<hidden>", line.rstrip()), flush=True)
 
     threading.Thread(target=read, daemon=True).start()
     return process

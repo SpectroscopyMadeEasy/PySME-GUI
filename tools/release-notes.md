@@ -14,8 +14,9 @@ You do not need the *Source code* files that GitHub adds.
 
 1. Open the disk image and drag **PySME** onto **Applications**.
 2. Open PySME. The app is not signed with an Apple Developer ID, so macOS blocks
-   it the first time: open *System Settings → Privacy & Security*, scroll down
-   and choose *Open Anyway*.
+   it the first time. In the message that appears choose **Done** (not *Move to
+   Bin*), then open *System Settings → Privacy & Security*, scroll down and
+   choose *Open Anyway*.
 
 ### Windows
 

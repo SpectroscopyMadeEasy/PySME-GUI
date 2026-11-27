@@ -392,10 +392,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         process.standardError = pipe
         startGeneration += 1
         let generation = startGeneration
+        serverURL = nil
         readers = [LineReader(pipe) { [weak self] line in
             guard let self = self, generation == self.startGeneration else { return }
             self.record(line)
-            if line.hasPrefix("PYSME_GUI_URL "), let url = URL(string: String(line.dropFirst(14))) {
+            // Only the first address counts: what the program prints later can
+            // hold text from files, which must not be able to name another one.
+            if self.serverURL == nil, line.hasPrefix("PYSME_GUI_URL "),
+               let url = URL(string: String(line.dropFirst(14))),
+               url.scheme == "http", url.host == "127.0.0.1" {
                 self.serverURL = url
                 self.web.load(URLRequest(url: url))
             }
@@ -526,7 +531,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         for directory in folders {
             try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent(name)
-            if (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil { return url }
+            if (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil {
+                try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                return url
+            }
         }
         return nil
     }
@@ -550,10 +558,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             return
         }
         let choice = ask("Report saved",
-                         "\(file.path)\n\nIt has not been sent yet.\n\n"
+                         "\(file.path)\n\nIt has not been sent yet. Please open it and check it before "
+                         + "you pass it on: it holds the program's log, with names of your files and folders.\n\n"
                          + "GitHub issue: needs a GitHub account. Drag the file into the page. Issues are public.\n\n"
                          + "Without GitHub: give the file to the person who gave you the program.",
-                         ["Open GitHub issue", "Show file", "Back"])
+                         ["Show file", "Open GitHub issue", "Back"])
         if choice == "Back" { return }
         if choice == "Show file" {
             NSWorkspace.shared.activateFileViewerSelecting([file])
@@ -631,8 +640,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             }
             return
         }
-        // Only the local interface may use the native bridge.
-        guard message.frameInfo.securityOrigin.host == "127.0.0.1",
+        // Only the page of the interface that runs may use the native bridge.
+        guard message.frameInfo.isMainFrame,
+              message.frameInfo.securityOrigin.`protocol` == "http",
+              message.frameInfo.securityOrigin.host == "127.0.0.1",
+              message.frameInfo.securityOrigin.port == serverURL?.port,
               let body = message.body as? [String: Any],
               let type = body["type"] as? String
         else { return }

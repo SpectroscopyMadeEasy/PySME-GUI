@@ -3,7 +3,8 @@
 It listens on 127.0.0.1 only. Because the API can read and write files, every
 API request must carry the random token created at start-up, and the Host
 header must name the loopback address (this blocks other web pages in a browser
-from reaching it, including through DNS rebinding).
+from reaching it, including through DNS rebinding). On Linux, connections of
+other users are refused altogether (see localpeer.py).
 """
 
 import argparse
@@ -23,7 +24,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import ISSUE_REPO, __version__, envmanager, instance, report
+from . import ISSUE_REPO, __version__, envmanager, instance, localpeer, report
 from .envmanager import is_within
 from .jobs import JobManager, LogBuffer
 from .session import Session, UserError, available_options
@@ -31,6 +32,8 @@ from .session import Session, UserError, available_options
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 THEMES = ("auto", "light", "dark")
 MAX_BODY = 5_000_000
+# A connection that sends nothing for this long is closed (seconds).
+IDLE_LIMIT = 120
 # Stated here: Windows takes these from its registry, where other programs may
 # have changed them, and a browser then refuses to run the page's script.
 CONTENT_TYPES = {
@@ -668,6 +671,7 @@ def make_handler(app):
     class Handler(BaseHTTPRequestHandler):
         server_version = "PySME-GUI"
         protocol_version = "HTTP/1.1"
+        timeout = IDLE_LIMIT
 
         def log_message(self, format, *args):
             pass
@@ -719,16 +723,28 @@ def make_handler(app):
                     or mimetypes.guess_type(path)[0] or "application/octet-stream")
             self._send(200, content, kind, cache)
 
+        def _refuse(self, message, status):
+            """Answer without reading what was sent, and hang up."""
+            self.close_connection = True
+            self._json({"error": message}, status)
+
         def do_POST(self):
-            # Always consume the body so the connection stays usable.
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
-                self.close_connection = True
-                return self._json({"error": "Request too large"}, 413)
-            raw = self.rfile.read(length)
             url = urlparse(self.path)
             if not self._host_ok() or not url.path.startswith("/api/"):
-                return self._json({"error": "Not found"}, 404)
+                return self._refuse("Not found", 404)
+            # Before the body is read: someone without the token must not be
+            # able to keep the program waiting for it.
+            if not self._authorised():
+                return self._refuse("Missing or wrong access token", 403)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:
+                return self._refuse("Bad request", 400)
+            if length > MAX_BODY:
+                return self._refuse("Request too large", 413)
+            raw = self.rfile.read(length)
 
             def action():
                 body = json.loads(raw or b"{}")
@@ -750,10 +766,24 @@ def make_handler(app):
     return Handler
 
 
+class LocalServer(ThreadingHTTPServer):
+    daemon_threads = True
+    check_user = False              # set where the system names a connection's user
+
+    def verify_request(self, request, client_address):
+        # Called before the connection gets a thread or is read from.
+        if not self.check_user:
+            return True
+        return localpeer.is_this_user(client_address[:2], request.getsockname()[:2])
+
+
 def create_server(port=0):
     app = App()
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
-    server.daemon_threads = True
+    server = LocalServer(("127.0.0.1", port), make_handler(app))
+    server.check_user = localpeer.can_tell()
+    if sys.platform.startswith("linux") and not server.check_user:
+        app.log.add("This system does not say which user a local connection comes from; "
+                    "only the access token protects the interface.")
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={app.token}"
     return app, server, url
 
@@ -797,7 +827,16 @@ def main(argv=None):
                 show(url)
             return
 
+    if envmanager.is_within(os.path.dirname(os.path.abspath(__file__)), envmanager.app_home()):
+        try:
+            envmanager.keep_private()           # also for installations made earlier
+        except (OSError, RuntimeError) as exc:
+            print(f"WARNING {exc}", flush=True)
     app, server, url = create_server(args.port)
+    # --no-browser asks for the address; the Mac app reads it and hides it. It
+    # takes the first one it sees, so this comes before any file is opened:
+    # opening one prints its name, which could be made to look like an address.
+    announce(url, args.no_browser or args.app_mode)
     if args.file:
         try:
             app.session.open_path(args.file)
@@ -819,8 +858,6 @@ def main(argv=None):
 
         threading.Thread(target=watch_parent, daemon=True).start()
 
-    # --no-browser asks for the address; the Mac app reads it and hides it.
-    announce(url, args.no_browser or args.app_mode)
     if browser_version:
         app.on_quit = stop              # the Mac app quits by its own menu
         instance.register(url)

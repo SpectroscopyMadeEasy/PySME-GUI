@@ -31,7 +31,21 @@ function fmt(value, digits = 4) {
 }
 const fixed = (value, digits) => (typeof value === "number" ? value.toFixed(digits) : "–");
 
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
+/* The address a start gives holds the access token. It is kept for this tab and
+   taken out of the address, so that it does not stay in the address bar or get
+   copied or bookmarked with it. */
+function takeToken() {
+  const address = new URL(location.href);
+  const given = address.searchParams.get("token");
+  try {
+    if (!given) return sessionStorage.getItem("pysme-token") || "";
+    sessionStorage.setItem("pysme-token", given);
+    address.searchParams.delete("token");
+    history.replaceState(null, "", address);
+  } catch (error) { /* no storage: the address stays as it is */ }
+  return given || "";
+}
+const TOKEN = takeToken();
 const NATIVE = Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.native);
 
 async function request(path, body) {
@@ -546,11 +560,15 @@ function shownMask(segment) {
   return segment.mask.map((m) => (m & 3) | (free && m & (segment.velocity_follows ? 1 : 4) ? 4 : 0));
 }
 
+/* Plotly reads tags such as <a href> in its texts. Text that comes from a file
+   is to be shown as it is written. */
+const plotText = (text) => String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
 /* The labels as Plotly wants them, in the colours of the theme now shown. */
 const lineAnnotations = (lines) => lines.map((line) => ({
-  x: line.x, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: line.species,
+  x: line.x, xref: "x", y: 0.035, yref: "y domain", yanchor: "bottom", text: plotText(line.species),
   textangle: -90, showarrow: false, font: { size: 10, color: css("--muted") },
-  hovertext: `${line.species} ${line.wave.toFixed(3)} Å`,
+  hovertext: `${plotText(line.species)} ${line.wave.toFixed(3)} Å`,
   captureevents: true,
 }));
 

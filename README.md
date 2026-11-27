@@ -31,8 +31,8 @@ You do not need Python, conda or Node installed.
 
 The app is not signed with an Apple Developer ID. A disk image built on your own
 Mac opens normally. One that was **downloaded** is blocked by Gatekeeper: after
-the first attempt, open *System Settings → Privacy & Security* and choose
-*Open Anyway*.
+the first attempt, choose *Done* in the message that appears (not *Move to Bin*),
+then open *System Settings → Privacy & Security* and choose *Open Anyway*.
 
 ### Linux (x86_64)
 
@@ -239,7 +239,8 @@ tools/package.py                    # the Windows and Linux downloads, from HEAD
 ```
 
 The server listens on 127.0.0.1 only, requires a random per-session token, and
-checks the `Host` header. It does not open NumPy pickle files (`.npy`, `.npz`).
+checks the `Host` header; on Linux it also refuses connections of other users.
+It does not open NumPy pickle files (`.npy`, `.npz`).
 
 To check the packaged app without clicking through it, start the binary with
 `PYSME_GUI_SELFTEST=<folder>`: it runs the solar example in the real window,

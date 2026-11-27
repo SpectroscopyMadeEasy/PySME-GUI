@@ -74,6 +74,24 @@ def app_home():
     return os.path.join(base, "pysme-gui")
 
 
+def keep_private():
+    """Let only this user into the app's folder (Linux and macOS).
+
+    It holds the programs that get run, the logs and the record with the access
+    token. A folder that belongs to someone else is refused. On Windows the
+    folder under LOCALAPPDATA is private already.
+    """
+    if os.name != "posix":
+        return
+    home = app_home()
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    info = os.stat(home)
+    if info.st_uid != os.getuid():
+        raise RuntimeError(f"{home} belongs to another user; PySME-GUI needs a folder of your own.")
+    if info.st_mode & 0o077:
+        os.chmod(home, info.st_mode & 0o7700)
+
+
 def _patiently(action):
     """Run a file operation that Windows may refuse for a moment, while another
     request or a virus scanner has the file open."""
@@ -554,6 +572,7 @@ def setup(source, bundle_id=None, repair=False, log=print):
     recommended version is used. A repair rebuilds the chosen environment from
     its package list.
     """
+    keep_private()
     gui_id = add_gui(source)
     try:
         constants = gui_info(gui_id)

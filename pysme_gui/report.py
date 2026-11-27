@@ -147,7 +147,11 @@ def build(description, session, job, log_lines, smelib, managed, update_task,
     section("Versions", _safe_rows(lambda: _versions(smelib)))
     section("System", _safe_rows(_system))
     section("Installation", _safe_rows(lambda: _installation(managed, update_task)))
-    section("Last run", [(k, v) for k, v in job.items() if k in ("state", "kind", "elapsed", "error", "progress")])
+    # While fitting, the progress text holds the values being tried.
+    section("Last run", [
+        (k, v if include_settings or k != "progress" or not v else "(hidden)")
+        for k, v in job.items() if k in ("state", "kind", "elapsed", "error", "progress")
+    ])
     if include_settings:
         section("Current settings", _safe_rows(lambda: _settings(session)))
 
@@ -190,7 +194,9 @@ def save(text, now=None):
             path = os.path.join(folder, name)
             try:
                 # utf-8-sig: old Windows editors need the mark to show Chinese.
-                with open(path, "x", encoding="utf-8-sig", errors="replace") as handle:
+                # Only this user may read it (the mode means nothing on Windows).
+                with open(path, "x", encoding="utf-8-sig", errors="replace",
+                          opener=lambda name, flags: os.open(name, flags, 0o600)) as handle:
                     handle.write(text)
                 return path
             except FileExistsError:
@@ -201,13 +207,24 @@ def save(text, now=None):
     raise OSError(f"Could not save the report: {failure}")
 
 
+def _version_only(name, value):
+    """A version for a public address, never other text: where a part of the
+    program is broken, what stands there is an error message, maybe with paths."""
+    value = str(value)
+    if name == "SMElib":                    # "SME Library version: 6.13.23, darwin [...]"
+        found = re.search(r"version:?\s*(\d+(?:\.\d+)+)", value)
+        value = found.group(1) if found else value
+    return value if re.fullmatch(r"\d+(\.\d+)+[0-9A-Za-z.+\-]*", value) else "unknown"
+
+
 def issue_url(repo, subject, filename, smelib):
     """A pre-filled new-issue page.
 
     Only versions and the system go into the address. What the user wrote and
     the log stay in the file, which they attach themselves.
     """
-    versions = [f"{key}: {value}" for key, value in _safe_rows(lambda: _versions(smelib))
+    versions = [f"{key}: {_version_only(key, value)}"
+                for key, value in _safe_rows(lambda: _versions(smelib))
                 if key in ("PySME-GUI", "SMElib", "Python", "pysme-astro")]
     body = "\n".join(
         ["**What happened?**", "", "",
