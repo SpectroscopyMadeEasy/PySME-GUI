@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -189,7 +190,7 @@ def test_a_restart_is_needed_only_until_what_is_chosen_runs(home, monkeypatch):
 def test_a_result_is_marked_until_it_has_been_looked_at(home, monkeypatch, fails):
     monkeypatch.setattr(server, "is_managed", lambda: True)
     updater = Updater(LogBuffer())
-    updater.seen()                                             # nothing to look at yet
+    updater.seen(None)                                         # nothing to look at yet
     assert updater.state == {"state": "idle"}
 
     def action(log):
@@ -202,7 +203,7 @@ def test_a_result_is_marked_until_it_has_been_looked_at(home, monkeypatch, fails
         time.sleep(0.01)
     assert updater.state["state"] == ("failed" if fails else "done")
     assert updater.state["seen"] is False
-    updater.seen()
+    updater.seen(updater.state["id"])
     assert updater.state["seen"] is True
 
 
@@ -368,3 +369,132 @@ def test_exported_spectrum_records_the_versions(tmp_path):
     again = Session()
     again.load_sme(saved)
     assert again.computed_with == session.computed_with
+
+
+# ------------------------------------------------------- one window beside another
+
+# Another PySME window, as far as an installation can tell: it marks the one it
+# runs from, and lives until it is ended.
+OTHER_WINDOW = (
+    "import sys\n"
+    "from pysme_gui import envmanager\n"
+    "envmanager.hold_running_env(sys.argv[1])\n"
+    "print('marked', flush=True)\n"
+    "sys.stdin.read()\n"
+)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows refuses to move files in use")
+def test_a_version_another_window_runs_from_is_not_removed(home):
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    first = envmanager.selection()[1]
+    envmanager.use_env(envmanager.install_pysme("1.3.0", log=quiet), log=quiet)
+    prefix = os.path.join(envmanager.env_dir(first), "venv")
+    os.makedirs(prefix, exist_ok=True)
+    windows = [
+        subprocess.Popen(
+            [sys.executable, "-c", OTHER_WINDOW, prefix], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, text=True, env=dict(os.environ, PYTHONPATH=REPO),
+        )
+        for _ in range(2)
+    ]
+    try:
+        for window in windows:
+            assert window.stdout.readline().strip() == "marked"
+        with pytest.raises(RuntimeError, match="Another PySME window"):
+            envmanager.remove_env(first, log=quiet)
+        windows[0].kill()                       # ended without any tidying up
+        windows[0].wait()
+        with pytest.raises(RuntimeError, match="Another PySME window"):
+            envmanager.remove_env(first, log=quiet)
+        assert envmanager.env_info(first)
+        windows[1].kill()
+        windows[1].wait()
+        envmanager.remove_env(first, log=quiet)
+        assert not os.path.exists(envmanager.env_dir(first))
+    finally:
+        for window in windows:
+            window.kill()
+            window.communicate()
+
+
+def test_a_python_from_elsewhere_marks_nothing(home, tmp_path):
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    envmanager.hold_running_env(str(tmp_path / "another" / "venv"))
+    assert not os.path.exists(os.path.join(envmanager.env_dir(envmanager.selection()[1]), "in-use"))
+
+
+def test_a_starting_interface_marks_what_it_runs_from(monkeypatch):
+    marked = []
+
+    class App:
+        class jobs:
+            @staticmethod
+            def shutdown():
+                pass
+
+    class Server:
+        def serve_forever(self):
+            assert marked, "marked before it serves"
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(envmanager, "hold_running_env", lambda: marked.append(True))
+    monkeypatch.setattr(server, "create_server", lambda port=0: (App(), Server(), "url"))
+    monkeypatch.setattr(server.signal, "signal", lambda *a: None)
+    server.main(["--app-mode"])
+    assert marked == [True]
+
+
+def test_what_a_check_found_is_judged_by_what_is_chosen_now(home, monkeypatch):
+    monkeypatch.setattr(server, "is_managed", lambda: True)
+    monkeypatch.setattr(server, "pysme_version", lambda: "1.2.0")
+    asked = []
+    monkeypatch.setattr(envmanager, "latest_gui", lambda: asked.append(1) or envmanager.read_constants(
+        '__version__ = "1.1.0"\nPYSME_MINIMUM = "1.2.0"\nPYSME_BELOW = "2.0"\n'))
+    monkeypatch.setattr(envmanager, "available_pysme", lambda: [
+        {"version": "1.3.0", "prerelease": False, "date": ""}])
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    updater = Updater(LogBuffer())
+    assert updater.latest is None
+    first = updater.check()
+    assert first["gui_newer"] and first["pysme_new"] == "1.3.0"
+    envmanager.setup(home.source("1.1.0"), log=quiet)          # updated
+    assert not updater.latest["gui_newer"]
+    envmanager.rollback_gui(log=quiet)                         # and gone back
+    info = updater.info()
+    assert info["latest"]["gui_newer"] and info["left_gui"] == "1.1.0"
+    envmanager.install_pysme("1.3.0", log=quiet)
+    assert updater.latest["pysme_new"] is None
+    assert len(asked) == 1                                     # nothing was asked again
+
+
+def test_with_an_own_python_a_changed_interface_still_waits_for_a_restart(home, monkeypatch):
+    envmanager.setup(home.source("1.0.0"), log=quiet)
+    envmanager.change_settings(python=sys.executable)          # the one running
+    running = os.path.join(envmanager.gui_package(envmanager.selection()[0]), "server.py")
+    monkeypatch.setattr(server, "__file__", running)
+    assert not Updater.restart_needed()
+    envmanager.setup(home.source("1.1.0"), log=quiet)
+    assert Updater.restart_needed()
+    # Code from a checkout, as in development, has nothing to be replaced.
+    monkeypatch.setattr(server, "__file__", os.path.join(REPO, "pysme_gui", "server.py"))
+    assert not Updater.restart_needed()
+
+
+def test_a_late_look_at_an_earlier_result_leaves_the_new_one_marked(home, monkeypatch):
+    monkeypatch.setattr(server, "is_managed", lambda: True)
+    updater = Updater(LogBuffer())
+    ids = []
+    for _ in range(2):
+        updater._start("Installing", lambda log: None, "Installed.")
+        deadline = time.time() + 30
+        while updater.state["state"] == "running" and time.time() < deadline:
+            time.sleep(0.01)
+        ids.append(updater.state["id"])
+    assert ids[0] != ids[1]
+    updater.seen(ids[0])
+    assert updater.state["seen"] is False
+    updater.seen(ids[1])
+    assert updater.state["seen"] is True

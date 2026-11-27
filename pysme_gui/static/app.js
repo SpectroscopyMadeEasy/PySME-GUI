@@ -1877,7 +1877,7 @@ async function showSettings(info) {
       h("span", {}, "Model data"), h("span", {}, "~/.sme (shared by all PySME versions)")));
 
   if ((task.state === "done" || task.state === "failed") && !task.seen) {
-    request("update/seen", {}).then(refresh).catch(() => {});
+    request("update/seen", { id: task.id }).then(refresh).catch(() => {});
   }
 
   const previous = $("#dialog .dialog-body");
@@ -1949,6 +1949,7 @@ function advancedSettings(info) {
     ui.ownDraft = null;
     toast(checked ? `Checked: the interface starts with PySME ${checked.pysme}. It is used after a restart.` : "The app's own PySME is used after a restart.");
     await showSettings(result);
+    await refresh();      // the dot beside the menu follows what was saved
   };
 
   const button = h("button", {

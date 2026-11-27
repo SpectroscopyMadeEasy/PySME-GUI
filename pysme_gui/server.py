@@ -91,7 +91,8 @@ class Updater:
     def __init__(self, log):
         self.log = log
         self.state = {"state": "idle"}
-        self.latest = None
+        self._found = None              # what the last check found
+        self._tasks = 0
         self._lock = threading.Lock()
 
     @staticmethod
@@ -104,26 +105,38 @@ class Updater:
         return own_constants()
 
     def check(self):
-        result = {"checked": time.strftime("%H:%M"), "errors": [], "gui": None, "releases": None,
-                  "gui_note": None}
+        """Ask what has been published, and judge it."""
+        found = {"checked": time.strftime("%H:%M"), "errors": [], "published": None,
+                 "releases": None, "gui_note": None}
+        try:
+            found["published"] = envmanager.latest_gui()
+        except envmanager.NoRelease as exc:
+            found["gui_note"] = str(exc)
+        except Exception as exc:
+            found["errors"].append(f"Interface: {exc}")
+        try:
+            found["releases"] = envmanager.available_pysme()
+        except Exception as exc:
+            found["errors"].append(f"PySME: {exc}")
+        self._found = found
+        return self.latest
+
+    @property
+    def latest(self):
+        """What the last check found, as it stands against what is chosen now,
+        or None before a check. Judged anew each time: after an update, a switch
+        or a way back, the same releases mean something else."""
+        found = self._found
+        if found is None:
+            return None
         newer = envmanager.version_key
         constants = self.constants()
-        try:
-            published = envmanager.latest_gui()
-            result["gui"] = published["version"]
-        except envmanager.NoRelease as exc:
-            published = None
-            result["gui_note"] = str(exc)
-        except Exception as exc:
-            published = None
-            result["errors"].append(f"Interface: {exc}")
-        try:
-            result["releases"] = [
-                r for r in envmanager.available_pysme()
-                if envmanager.supports(constants, r["version"])
-            ]
-        except Exception as exc:
-            result["errors"].append(f"PySME: {exc}")
+        published = found["published"]
+        result = {key: found[key] for key in ("checked", "errors", "gui_note")}
+        result["gui"] = published["version"] if published else None
+        result["releases"] = None if found["releases"] is None else [
+            r for r in found["releases"] if envmanager.supports(constants, r["version"])
+        ]
         result["gui_newer"] = bool(result["gui"]) and newer(result["gui"]) > newer(constants["version"])
         result["gui_blocked"] = None
         if result["gui_newer"] and is_managed():
@@ -142,7 +155,6 @@ class Updater:
         result["pysme_new"] = (
             newest if newest and newer(newest) > max(map(newer, have)) else None
         )
-        self.latest = result
         return result
 
     def _environments(self, constants):
@@ -161,22 +173,32 @@ class Updater:
     def restart_needed():
         """True when what is chosen now is not what is running."""
         custom = envmanager.settings().get("python")
-        if custom:
-            return not same_program(sys.executable, custom)
-        gui_id, env_id = envmanager.selection()
-        if not is_managed():
-            # The user has just gone back to the app's own PySME.
-            return bool(envmanager.env_info(env_id))
-        if not gui_id:
-            return False
-        if envmanager.env_info(env_id) and not is_within(sys.prefix, envmanager.env_dir(env_id)):
+        if custom and not same_program(sys.executable, custom):
             return True
-        return not is_within(os.path.abspath(__file__), envmanager.gui_dir(gui_id))
+        gui_id, env_id = envmanager.selection()
+        if not custom:
+            if not is_managed():
+                # The user has just gone back to the app's own PySME.
+                return bool(envmanager.env_info(env_id))
+            if gui_id and envmanager.env_info(env_id) \
+                    and not is_within(sys.prefix, envmanager.env_dir(env_id)):
+                return True
+        # Which interface runs matters with either Python. Code run from a
+        # checkout, as in development, is not an installed copy to be replaced.
+        code = os.path.abspath(__file__)
+        if not gui_id or not is_within(code, os.path.join(envmanager.app_home(), "gui")):
+            return False
+        return not is_within(code, envmanager.gui_dir(gui_id))
 
-    def seen(self):
-        """The user has looked at the result of the last installation or update."""
-        if self.state.get("state") in ("done", "failed"):
-            self.state["seen"] = True
+    def seen(self, task_id):
+        """The user has looked at the result of this installation or update.
+
+        Named, because another window may report an older result after a newer
+        one has arrived.
+        """
+        state = self.state
+        if state.get("state") in ("done", "failed") and state.get("id") == task_id:
+            state["seen"] = True
 
     def info(self):
         managed = is_managed()
@@ -241,7 +263,9 @@ class Updater:
         self._require_managed()
         with self._lock:
             self._require_idle()
-            self.state = {"state": "running", "title": title, "step": "Starting"}
+            self._tasks += 1
+            number = self._tasks
+            self.state = {"state": "running", "id": number, "title": title, "step": "Starting"}
 
         def work():
             def log(text):
@@ -251,16 +275,12 @@ class Updater:
 
             try:
                 action(log)
-                self.state = {"state": "done", "message": done, "restarts": restarts,
-                              "seen": False}
+                self.state = {"state": "done", "id": number, "message": done,
+                              "restarts": restarts, "seen": False}
             except Exception as exc:
                 log(f"failed: {exc}")
-                self.state = {"state": "failed", "title": title, "error": str(exc),
-                              "seen": False}
-            if self.latest:
-                have = [i["pysme_version"] for i in envmanager.installed_envs()]
-                if self.latest.get("pysme_new") in have:
-                    self.latest["pysme_new"] = None
+                self.state = {"state": "failed", "id": number, "title": title,
+                              "error": str(exc), "seen": False}
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -272,12 +292,7 @@ class Updater:
         if latest["gui_blocked"]:
             raise UserError(latest["gui_blocked"])
 
-        def action(log):
-            envmanager.update_gui(log=log)
-            # It is installed now; do not offer it again.
-            self.latest["gui_newer"] = False
-
-        self._start("Updating the interface", action,
+        self._start("Updating the interface", lambda log: envmanager.update_gui(log=log),
                     "Interface updated. PySME is unchanged.", restarts=True)
 
     def set_channel(self, name):
@@ -562,7 +577,7 @@ class App:
             self.jobs.cancel()
             return self.state()
         if route == "update/seen":
-            self.updater.seen()
+            self.updater.seen(body.get("id"))
             return self.state()
         if route == "update/check":
             self.updater.check()
@@ -832,6 +847,10 @@ def main(argv=None):
             envmanager.keep_private()           # also for installations made earlier
         except (OSError, RuntimeError) as exc:
             print(f"WARNING {exc}", flush=True)
+    try:
+        envmanager.hold_running_env()       # so that no other window removes it
+    except OSError as exc:
+        print(f"WARNING could not mark this PySME as in use: {exc}", flush=True)
     app, server, url = create_server(args.port)
     # --no-browser asks for the address; the Mac app reads it and hides it. It
     # takes the first one it sees, so this comes before any file is opened:

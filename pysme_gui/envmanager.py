@@ -364,6 +364,65 @@ def _prune_gui(keep, log):
         shutil.rmtree(path, ignore_errors=True)
 
 
+# ------------------------------------------------------------------- in use
+
+# Another PySME window (opening a file starts one of its own) may run from an
+# installation that this one could remove. Each running interface therefore keeps
+# a file locked inside the installation it runs from; the system lets go of the
+# lock when the process ends, however it ends. Windows needs none of this: it
+# refuses to move files that a program is using.
+_held = []
+
+
+def hold_running_env(prefix=None):
+    """For as long as this process lives, mark the installation it runs from."""
+    root = os.path.join(app_home(), "envs")
+    prefix = prefix or sys.prefix
+    if os.name != "posix" or not is_within(prefix, root):
+        return
+    import fcntl
+
+    env_id = os.path.relpath(os.path.realpath(prefix), os.path.realpath(root)).split(os.sep)[0]
+    folder = os.path.join(env_dir(env_id), "in-use")
+    os.makedirs(folder, exist_ok=True)
+    name = os.path.join(folder, f"{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    handle = open(name + ".new", "w")
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # Named only once it is locked: an unlocked one counts as left behind.
+    os.replace(name + ".new", name + ".lock")
+    _held.append(handle)
+
+
+def env_held(env_id):
+    """True if a running PySME-GUI has marked this installation as its own."""
+    if os.name != "posix":
+        return False
+    import fcntl
+
+    folder = os.path.join(env_dir(env_id), "in-use")
+    try:
+        names = os.listdir(folder)
+    except FileNotFoundError:
+        return False
+    for name in names:
+        if not name.endswith(".lock"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            with open(path, "a") as handle:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return True
+                os.remove(path)             # its process has ended
+        except FileNotFoundError:
+            continue
+    return False
+
+
+# ----------------------------------------------------------------- removal
+
+
 def remove_env(env_id, log=print):
     record = current_record()
     if env_id == selection(record)[1]:
@@ -372,6 +431,10 @@ def remove_env(env_id, log=print):
         raise RuntimeError("That PySME installation no longer exists.")
     if _is_running_from(env_dir(env_id)):
         raise RuntimeError("This PySME is still running. Restart first.")
+    if env_held(env_id):
+        raise RuntimeError(
+            "Another PySME window is using this PySME. Quit it and try again."
+        )
     log(f"Removing PySME {env_info(env_id)['pysme_version']}")
     # Renamed first: Windows refuses that while a program still uses the files,
     # so an installation in use is never left half removed.
