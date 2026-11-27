@@ -26,4 +26,6 @@ icon_size = 128
 text_size = 14
 # Centres of the icons: the app on the left, as Mac users expect.
 icon_locations = {name: (170, 175), "Applications": (470, 175)}
-hide_extensions = [name]
+# Do not set hide_extensions: it marks the app itself with Finder information,
+# which a signed app may not carry ("codesign --verify --strict" then fails).
+# Finder normally hides ".app" anyway.

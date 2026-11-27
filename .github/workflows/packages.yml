@@ -107,7 +107,22 @@ jobs:
           hdiutil detach "$mount"
 
       - name: Install from the app and run it
-        run: tools/check_mac_app.sh "$RUNNER_TEMP/Applications test/PySME.app"
+        id: check
+        shell: bash       # with pipefail, so a failed check is not hidden by tee
+        run: |
+          tools/check_mac_app.sh "$RUNNER_TEMP/Applications test/PySME.app" 2>&1 |
+            tee "$RUNNER_TEMP/check.log"
+
+      # The full log needs a GitHub sign-in; an annotation can be read without.
+      - name: Show the end of the check as an annotation
+        if: failure() && steps.check.outcome == 'failure'
+        shell: bash
+        run: |
+          text=$(tail -n 30 "$RUNNER_TEMP/check.log")
+          text=${text//'%'/%25}
+          text=${text//$'\r'/%0D}
+          text=${text//$'\n'/%0A}
+          echo "::error title=End of the check::$text"
 
       # Not required yet: it needs a window, and this has not been tried on
       # GitHub's machines. A warning on the run says how it went.
